@@ -7,12 +7,43 @@ import { CreateUsersAndChannels1775687773260 } from './migrations/1775687773260-
 import { CreateAuthTokens1777579850478 } from './migrations/1777579850478-CreateAuthTokens';
 import { createTestDataSource } from '../test/create-test-data-source';
 
+const MIGRATIONS = [
+  CreateUsersAndChannels1775687773260,
+  CreateAuthTokens1777579850478,
+];
+
 const MANAGED_TABLES = [
   'users',
   'channels',
   'refresh_tokens',
   'verification_tokens',
 ];
+
+/**
+ * Drops every table and enum type in the `public` schema (including the
+ * `migrations` table), so the migrations can be applied from scratch no matter
+ * whether the schema was previously created by migrations or by `synchronize`.
+ */
+async function resetPublicSchema(dataSource: DataSource): Promise<void> {
+  const tables = await dataSource.query<{ tablename: string }[]>(
+    `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
+  );
+  if (tables.length > 0) {
+    const tableList = tables.map((t) => `"public"."${t.tablename}"`).join(', ');
+    await dataSource.query(`DROP TABLE IF EXISTS ${tableList} CASCADE`);
+  }
+
+  const enumTypes = await dataSource.query<{ typname: string }[]>(
+    `SELECT t.typname
+       FROM pg_type t
+       JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE n.nspname = 'public' AND t.typtype = 'e'`,
+  );
+  if (enumTypes.length > 0) {
+    const typeList = enumTypes.map((t) => `"public"."${t.typname}"`).join(', ');
+    await dataSource.query(`DROP TYPE IF EXISTS ${typeList} CASCADE`);
+  }
+}
 
 describe('Database migrations (integration)', () => {
   let dataSource: DataSource;
@@ -22,34 +53,31 @@ describe('Database migrations (integration)', () => {
       [User, Channel, RefreshToken, VerificationToken],
       {
         synchronize: false,
-        migrations: [
-          CreateUsersAndChannels1775687773260,
-          CreateAuthTokens1777579850478,
-        ],
+        migrations: MIGRATIONS,
       },
     );
 
     await dataSource.initialize();
-
-    await Promise.all([
-      ...MANAGED_TABLES.map((table) =>
-        dataSource.query(`DROP TABLE IF EXISTS "${table}" CASCADE`),
-      ),
-      dataSource.query(`DROP TABLE IF EXISTS "migrations" CASCADE`),
-    ]);
+    await resetPublicSchema(dataSource);
   });
 
   afterAll(async () => {
     // The second test undoes the last migration, leaving token tables missing.
-    // Re-apply so the shared DB is fully migrated when subsequent suites run.
-    await dataSource.runMigrations();
-    await dataSource.destroy();
+    // Re-apply so the shared DB is fully migrated when subsequent suites run
+    // (and when the suite fails midway, since the schema was reset above).
+    // Always destroy the DataSource, otherwise its open pg pool keeps Jest
+    // from exiting when the re-apply fails.
+    try {
+      await dataSource.runMigrations();
+    } finally {
+      await dataSource.destroy();
+    }
   });
 
   it('should apply all migrations and create all four tables', async () => {
     const ranMigrations = await dataSource.runMigrations();
 
-    expect(ranMigrations).toHaveLength(2);
+    expect(ranMigrations).toHaveLength(MIGRATIONS.length);
 
     const result = await dataSource.query<{ table_name: string }[]>(
       `SELECT table_name FROM information_schema.tables
