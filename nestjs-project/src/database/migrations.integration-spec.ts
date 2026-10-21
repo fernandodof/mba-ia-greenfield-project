@@ -65,8 +65,13 @@ describe('Database migrations (integration)', () => {
     // The second test undoes the last migration, leaving token tables missing.
     // Re-apply so the shared DB is fully migrated when subsequent suites run
     // (and when the suite fails midway, since the schema was reset above).
-    await dataSource.runMigrations();
-    await dataSource.destroy();
+    // Always destroy the DataSource, otherwise its open pg pool keeps Jest
+    // from exiting when the re-apply fails.
+    try {
+      await dataSource.runMigrations();
+    } finally {
+      await dataSource.destroy();
+    }
   });
 
   it('should apply all migrations and create all four tables', async () => {
