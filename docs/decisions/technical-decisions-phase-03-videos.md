@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-10-21
 scope_description: "Backend foundation for video upload and processing: queue technology, direct-to-storage 10GB multipart upload with draft pre-registration, object-storage usage (layout, presigned endpoints, local MinIO image), video worker topology and FFmpeg integration, unique video URL, streaming/download delivery, and video status lifecycle with failure handling."
 ---
@@ -51,7 +51,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (BullMQ on Redis via `@nestjs/bullmq`)** — it is the official Nest path already prescribed by the project's best-practices skill, offers per-video `jobId` dedupe, retries/backoff and Job Schedulers out of the box, and makes the queue a real, separate Compose service as the architecture and acceptance criteria expect; the cost is one Redis container plus the dual-write handling in TD-13. pg-boss (B) is the strongest alternative if avoiding new infrastructure matters more than official Nest integration. Exact `bullmq` major (5.x vs 6.x) is a library-pinning concern for `plan-resolve`.
 
-**Decision:** _[pending]_
+**Decision:** A (BullMQ on Redis via `@nestjs/bullmq`)
 
 ---
 
@@ -82,7 +82,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (S3 multipart with presigned part URLs)** — the only option that both keeps bytes off the API and supports 10GB on production S3, with resumability via `ListParts`. Suggested parameters for the plan: max declared size 10 GiB (10 × 1024³ bytes), fixed part size 64 MiB (≤ 160 parts for 10 GiB, well under 10,000), presigned URL TTL ~1h, size verified again with `HeadObject` before accepting completion. API shape and draft creation are in TD-03; cleanup in TD-04.
 
-**Decision:** _[pending]_
+**Decision:** A (S3 multipart with presigned part URLs, direct to storage)
 
 ---
 
@@ -113,7 +113,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (single start call creates draft + multipart session)** — matches the capability literally, keeps one resource and one table, and the extra `upload_id` column is cheap; Option B's flexibility (re-upload) is not required by any Phase 03 bullet. Endpoints are authenticated (global JWT guard) and the draft belongs to the caller's channel.
 
-**Decision:** _[pending]_
+**Decision:** A (single start call creates draft + multipart session)
 
 ---
 
@@ -143,7 +143,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option B (application sweeper + storage-native expiry as safety net)** — keeps the `videos` table truthful and storage bounded using the queue already in place; the threshold should be configurable via env (e.g., 24h).
 
-**Decision:** _[pending]_
+**Decision:** B (app sweeper job + storage-native expiry)
 
 ---
 
@@ -174,7 +174,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (single private bucket, `videos/{videoId}/…`)** — the simplest layout that satisfies Phase 03; serving thumbnails publicly is a listing concern for later phases and can be added as a prefix policy without moving objects. Original file extension/content-type is preserved as object metadata, not in the key.
 
-**Decision:** _[pending]_
+**Decision:** A (single private bucket, `videos/{videoId}/…`)
 
 ---
 
@@ -204,7 +204,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (internal endpoint for operations, public endpoint for presigning)** — the standard fix for SigV4 host binding that works the same in Docker and in production without host hacks; wrap both clients behind a single storage service so callers never choose.
 
-**Decision:** _[pending]_
+**Decision:** A (internal endpoint for operations, public endpoint for signing)
 
 ---
 
@@ -234,7 +234,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (`pgsty/silo`, pinned `RELEASE.*` tag)** — a pullable, pinned, maintained drop-in that keeps the "MinIO locally" premise and its env/command conventions; since all code talks S3 via the AWS SDK, swapping the image later costs only a Compose change. Bucket creation can be a one-shot `pgsty/mc` init service or an idempotent `CreateBucket` at app startup (implementation detail for the plan).
 
-**Decision:** _[pending]_
+**Decision:** A (`pgsty/silo`, pinned release tag)
 
 ---
 
@@ -263,7 +263,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (same codebase, separate entrypoint and `video-worker` Compose service)** — gives process/container isolation required by the architecture while reusing the existing entities, config and storage code with a single quality pipeline. Worker concurrency starts at 1 (configurable via env) since each job is CPU-bound.
 
-**Decision:** _[pending]_
+**Decision:** A (same codebase, separate entrypoint + `video-worker` service)
 
 ---
 
@@ -292,7 +292,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (apt ffmpeg + `execFile` wrapper + presigned GET input)** — avoids a 10GB local copy and any deprecated wrapper, keeps the worker image simple; if HTTP seeking proves slow or flaky in tests, Option B is a contained fallback inside the same wrapper. ffprobe failure (non-video file) is a non-retryable error (TD-12).
 
-**Decision:** _[pending]_
+**Decision:** A (apt ffmpeg + `execFile` wrapper + presigned GET input)
 
 ---
 
@@ -321,7 +321,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (random 11-char base64url with unique constraint and retry)** — short, unguessable, dependency-free, and the DB constraint makes "sem conflito" a hard guarantee rather than a probability.
 
-**Decision:** _[pending]_
+**Decision:** A (random 11-char base64url + unique constraint + retry)
 
 ---
 
@@ -351,7 +351,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (302 redirect to short-lived presigned GET, with `ResponseContentDisposition` for download)** — delegates Range/206 to the storage that already implements it, keeps the API out of the data path, and matches the architecture diagram; only `ready` videos are redirectable (TD-12).
 
-**Decision:** _[pending]_
+**Decision:** A (302 to short-lived presigned GET; `ResponseContentDisposition` for download)
 
 ---
 
@@ -381,7 +381,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (single `draft → processing → ready | failed` enum, 3 attempts with exponential backoff, `UnrecoverableError` for invalid media, terminal `failed` with reason)** — the minimal lifecycle that satisfies the acceptance criterion and stays idempotent under redelivery; reprocess (B) can be added later via `/decide` if real transient failures show up. Failed BullMQ jobs are retained (`removeOnFail` with a count) for inspection.
 
-**Decision:** _[pending]_
+**Decision:** A (`draft → processing → ready | failed`, 3 attempts + backoff, terminal failed)
 
 ---
 
@@ -411,7 +411,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (commit, then enqueue with `jobId = videoId`; idempotent completion; sweeper backstop)** — closes the dual-write gap with mechanisms already chosen (BullMQ dedupe + TD-04 scheduler) without introducing an outbox. If pg-boss were chosen in TD-01 instead, the enqueue could share the DB transaction and this TD would collapse.
 
-**Decision:** _[pending]_
+**Decision:** A (commit then enqueue with `jobId = videoId`, idempotent completion, sweeper)
 
 ---
 
@@ -436,7 +436,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (public by unique slug, `ready` only)** — consistent with the platform's anonymous-viewing premise and with TD-10's unguessable ids, and keeps the stream/download contract stable for Phase 05; Phase 04 then adds the publication/visibility gate. Upload and completion endpoints remain authenticated and owner-scoped.
 
-**Decision:** _[pending]_
+**Decision:** A (public by unique slug, `ready` only)
 
 ---
 
@@ -444,20 +444,20 @@ _Subprojects in scope:_
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Queue Technology for Video Processing Jobs | A (BullMQ on Redis via `@nestjs/bullmq`) | _[pending]_ |
-| TD-02 | Cross-layer | Upload Protocol for Files up to 10GB | A (S3 multipart with presigned part URLs, direct to storage) | _[pending]_ |
-| TD-03 | Cross-layer | Upload Session API Shape and Draft Pre-registration | A (single start call creates draft + multipart session) | _[pending]_ |
-| TD-04 | Backend | Abandoned / Incomplete Upload Cleanup | B (app sweeper job + storage-native expiry) | _[pending]_ |
-| TD-05 | Backend | Object Storage Layout (Buckets and Keys) | A (single private bucket, `videos/{videoId}/…`) | _[pending]_ |
-| TD-06 | Cross-layer | Presigned URL Endpoint — Internal vs. Public Host | A (internal endpoint for operations, public endpoint for signing) | _[pending]_ |
-| TD-07 | Repo-wide | MinIO Image Source for Local Docker Compose | A (`pgsty/silo`, pinned release tag) | _[pending]_ |
-| TD-08 | Repo-wide | Video Worker Runtime Topology | A (same codebase, separate entrypoint + `video-worker` service) | _[pending]_ |
-| TD-09 | Backend | FFmpeg Integration — Installation, Invocation and Media Access | A (apt ffmpeg + `execFile` wrapper + presigned GET input) | _[pending]_ |
-| TD-10 | Cross-layer | Unique Video URL Identifier | A (random 11-char base64url + unique constraint + retry) | _[pending]_ |
-| TD-11 | Cross-layer | Streaming and Download Delivery | A (302 to short-lived presigned GET; `ResponseContentDisposition` for download) | _[pending]_ |
-| TD-12 | Backend | Video Status Lifecycle and Processing Failure Handling | A (`draft → processing → ready \| failed`, 3 attempts + backoff, terminal failed) | _[pending]_ |
-| TD-13 | Backend | Consistency Between Upload Completion and Job Enqueue | A (commit then enqueue with `jobId = videoId`, idempotent completion, sweeper) | _[pending]_ |
-| TD-14 | Cross-layer | Access Policy for Streaming and Download in Phase 03 | A (public by unique slug, `ready` only) | _[pending]_ |
+| TD-01 | Backend | Queue Technology for Video Processing Jobs | A (BullMQ on Redis via `@nestjs/bullmq`) | A (BullMQ on Redis via `@nestjs/bullmq`) |
+| TD-02 | Cross-layer | Upload Protocol for Files up to 10GB | A (S3 multipart with presigned part URLs, direct to storage) | A (S3 multipart with presigned part URLs, direct to storage) |
+| TD-03 | Cross-layer | Upload Session API Shape and Draft Pre-registration | A (single start call creates draft + multipart session) | A (single start call creates draft + multipart session) |
+| TD-04 | Backend | Abandoned / Incomplete Upload Cleanup | B (app sweeper job + storage-native expiry) | B (app sweeper job + storage-native expiry) |
+| TD-05 | Backend | Object Storage Layout (Buckets and Keys) | A (single private bucket, `videos/{videoId}/…`) | A (single private bucket, `videos/{videoId}/…`) |
+| TD-06 | Cross-layer | Presigned URL Endpoint — Internal vs. Public Host | A (internal endpoint for operations, public endpoint for signing) | A (internal endpoint for operations, public endpoint for signing) |
+| TD-07 | Repo-wide | MinIO Image Source for Local Docker Compose | A (`pgsty/silo`, pinned release tag) | A (`pgsty/silo`, pinned release tag) |
+| TD-08 | Repo-wide | Video Worker Runtime Topology | A (same codebase, separate entrypoint + `video-worker` service) | A (same codebase, separate entrypoint + `video-worker` service) |
+| TD-09 | Backend | FFmpeg Integration — Installation, Invocation and Media Access | A (apt ffmpeg + `execFile` wrapper + presigned GET input) | A (apt ffmpeg + `execFile` wrapper + presigned GET input) |
+| TD-10 | Cross-layer | Unique Video URL Identifier | A (random 11-char base64url + unique constraint + retry) | A (random 11-char base64url + unique constraint + retry) |
+| TD-11 | Cross-layer | Streaming and Download Delivery | A (302 to short-lived presigned GET; `ResponseContentDisposition` for download) | A (302 to short-lived presigned GET; `ResponseContentDisposition` for download) |
+| TD-12 | Backend | Video Status Lifecycle and Processing Failure Handling | A (`draft → processing → ready \| failed`, 3 attempts + backoff, terminal failed) | A (`draft → processing → ready \| failed`, 3 attempts + backoff, terminal failed) |
+| TD-13 | Backend | Consistency Between Upload Completion and Job Enqueue | A (commit then enqueue with `jobId = videoId`, idempotent completion, sweeper) | A (commit then enqueue with `jobId = videoId`, idempotent completion, sweeper) |
+| TD-14 | Cross-layer | Access Policy for Streaming and Download in Phase 03 | A (public by unique slug, `ready` only) | A (public by unique slug, `ready` only) |
 
 ## Sources
 
