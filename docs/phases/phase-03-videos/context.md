@@ -3,12 +3,13 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-10-21T14:17:11-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-26T17:14:37-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-04T15:35:25-03:00"
   docs/decisions/technical-decisions-openapi-docs-nestjs.md: "2026-10-21T14:17:11-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-10-21T14:17:11-03:00"
   docs/phases/phase-02-auth/context.md: "2026-10-21T14:17:11-03:00"
   docs/phases/phase-02-auth-frontend/context.md: "2026-10-21T14:17:11-03:00"
   .claude/skills/testing-guide-nestjs-project/SKILL.md: "2026-10-21T14:17:11-03:00"
+  docs/phases/phase-03-videos/library-refs.md: "2026-11-04T15:23:37-03:00"
 ---
 
 # phase-03-videos — Context
@@ -48,20 +49,29 @@ sources_mtime:
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
-| phase-03-videos/TD-01 | phase | Backend | Queue Technology for Video Processing Jobs | decided | A (BullMQ on Redis via `@nestjs/bullmq`) | — |
-| phase-03-videos/TD-02 | phase | Cross-layer | Upload Protocol for Files up to 10GB | decided | A (S3 multipart with presigned part URLs, direct to storage) | — |
+| phase-03-videos/TD-01 | phase | Backend | Queue Technology for Video Processing Jobs | decided | A (BullMQ on Redis via `@nestjs/bullmq`) | `@nestjs/bullmq@^12.0.0`, `bullmq@^6.6.1`, `ioredis@^5.11.1`, `redis:8.10.3-alpine` (Docker image) |
+|     └─ Last revision: 2026-11-04 — Testing override (IC-1, user-decided): real Redis via Compose service name… | | | | | | |
+| phase-03-videos/TD-02 | phase | Cross-layer | Upload Protocol for Files up to 10GB | decided | A (S3 multipart with presigned part URLs, direct to storage) | `@aws-sdk/client-s3@^3.1161.0`, `@aws-sdk/s3-request-presigner@^3.1161.0` |
+|     └─ Last revision: 2026-11-04 — _(library-pinning note, confirmed)_ S3 clients use `WHEN_REQUIRED` checksums… | | | | | | |
 | phase-03-videos/TD-03 | phase | Cross-layer | Upload Session API Shape and Draft Pre-registration | decided | A (single start call creates draft + multipart session) | — |
+|     └─ Last revision: 2026-11-04 — _(proposed, confirmed)_ Upload-session contract + user abort outcome (AMB-5)… | | | | | | |
 | phase-03-videos/TD-04 | phase | Backend | Abandoned / Incomplete Upload Cleanup | decided | B (app sweeper job + storage-native expiry) | — |
 | phase-03-videos/TD-05 | phase | Backend | Object Storage Layout (Buckets and Keys) | decided | A (single private bucket, `videos/{videoId}/…`) | — |
-| phase-03-videos/TD-06 | phase | Cross-layer | Presigned URL Endpoint — Internal vs. Public Host | decided | A (internal endpoint for operations, public endpoint for signing) | — |
-| phase-03-videos/TD-07 | phase | Repo-wide | MinIO Image Source for Local Docker Compose | decided | A (`pgsty/silo`, pinned release tag) | — |
+| phase-03-videos/TD-06 | phase | Cross-layer | Presigned URL Endpoint — Internal vs. Public Host | decided | A (internal endpoint for operations, public endpoint for signing) | `@aws-sdk/client-s3@^3.1161.0`, `@aws-sdk/s3-request-presigner@^3.1161.0` |
+|     └─ Last revision: 2026-11-04 — Testing override (IC-1, user-decided): in-container presign with internal endpoint… | | | | | | |
+| phase-03-videos/TD-07 | phase | Repo-wide | MinIO Image Source for Local Docker Compose | decided | A (`pgsty/silo`, pinned release tag) | `pgsty/silo:RELEASE.2026-10-26T00-00-00Z`, `pgsty/mc:RELEASE.2026-10-26T00-00-00Z` (Docker images) |
+|     └─ Last revision: 2026-11-04 — Testing override (IC-1, user-decided): real Silo, no local-FS adapter; pin bumped… | | | | | | |
 | phase-03-videos/TD-08 | phase | Repo-wide | Video Worker Runtime Topology | decided | A (same codebase, separate entrypoint + `video-worker` service) | — |
-| phase-03-videos/TD-09 | phase | Backend | FFmpeg Integration — Installation, Invocation and Media Access | decided | A (apt ffmpeg + `execFile` wrapper + presigned GET input) | — |
+| phase-03-videos/TD-09 | phase | Backend | FFmpeg Integration — Installation, Invocation and Media Access | decided | A (apt ffmpeg + `execFile` wrapper + presigned GET input) | `ffmpeg` / `ffprobe` 5.1.x (Debian 12 bookworm apt, `7:5.1.9-0+deb12u1`) |
+|     └─ Last revision: 2026-11-04 — _(proposed, confirmed)_ Persisted metadata (AMB-2); thumbnail parameters (AMB-3)… | | | | | | |
 | phase-03-videos/TD-10 | phase | Cross-layer | Unique Video URL Identifier | decided | A (random 11-char base64url + unique constraint + retry) | — |
-| phase-03-videos/TD-11 | phase | Cross-layer | Streaming and Download Delivery | decided | A (302 to short-lived presigned GET; `ResponseContentDisposition` for download) | — |
+| phase-03-videos/TD-11 | phase | Cross-layer | Streaming and Download Delivery | decided | A (302 to short-lived presigned GET; `ResponseContentDisposition` for download) | `@aws-sdk/s3-request-presigner@^3.1161.0` |
 | phase-03-videos/TD-12 | phase | Backend | Video Status Lifecycle and Processing Failure Handling | decided | A (`draft → processing → ready \| failed`, 3 attempts + backoff, terminal failed) | — |
+|     └─ Last revision: 2026-11-04 — Status semantics (AMB-4, user-decided); _(proposed)_ terminal failure write (AMB-1)… | | | | | | |
 | phase-03-videos/TD-13 | phase | Backend | Consistency Between Upload Completion and Job Enqueue | decided | A (commit then enqueue with `jobId = videoId`, idempotent completion, sweeper) | — |
+|     └─ Last revision: 2026-11-04 — _(proposed, confirmed)_ Sweeper reconciliation for `processing` (AMB-1)… | | | | | | |
 | phase-03-videos/TD-14 | phase | Cross-layer | Access Policy for Streaming and Download in Phase 03 | decided | A (public by unique slug, `ready` only) | — |
+|     └─ Last revision: 2026-11-04 — Phase 04 boundary (AMB-4, user-decided): `ready`-only gate until Phase 04 publication… | | | | | | |
 
 _Source files:_
 
@@ -87,19 +97,31 @@ _Source files:_
 
 **Recommendation:** BullMQ on Redis via `@nestjs/bullmq` — it is the official Nest path already prescribed by the project's best-practices skill, offers per-video `jobId` dedupe, retries/backoff and Job Schedulers out of the box, and makes the queue a real, separate Compose service as the architecture and acceptance criteria expect; the cost is one Redis container plus the dual-write handling in TD-13. pg-boss (B) is the strongest alternative if avoiding new infrastructure matters more than official Nest integration. Exact `bullmq` major (5.x vs 6.x) is a library-pinning concern for `plan-resolve`.
 
-**Libraries:** —
+**Libraries:** `@nestjs/bullmq@^12.0.0`, `bullmq@^6.6.1`, `ioredis@^5.11.1`, `redis:8.10.3-alpine` (Docker image)
+
+**Revisions:**
+
+- 2026-11-04 — Testing override (IC-1, user-decided): queue producers, the video processor and the sweeper scheduler are integration/e2e-tested against the real Redis Compose service, addressed by its Compose service name (`REDIS_HOST=redis`). There is no in-memory queue fake and no `localhost` default in config factories, Joi defaults or test helpers. Redis runs with `maxmemory-policy noeviction`; worker connections keep ioredis `maxRetriesPerRequest: null` (BullMQ default for workers). `ioredis` is pinned to the 5.x line BullMQ 6 is tested against (`bullmq` devDependency `ioredis@5.11.1`), not the new 6.0.0 major. Rationale: the `testing-guide-nestjs-project` connection example (`REDIS_HOST ?? 'localhost'`) contradicts the root CLAUDE.md Docker-networking rule and the exercise's "não mocke o que dá para testar com a infra do Compose"; updating the guide itself is a separate follow-up.
 
 ### phase-03-videos/TD-02
 
 **Recommendation:** S3 multipart with presigned part URLs — the only option that both keeps bytes off the API and supports 10GB on production S3, with resumability via `ListParts`. Suggested parameters for the plan: max declared size 10 GiB (10 × 1024³ bytes), fixed part size 64 MiB (≤ 160 parts for 10 GiB, well under 10,000), presigned URL TTL ~1h, size verified again with `HeadObject` before accepting completion. API shape and draft creation are in TD-03; cleanup in TD-04.
 
-**Libraries:** —
+**Libraries:** `@aws-sdk/client-s3@^3.1161.0`, `@aws-sdk/s3-request-presigner@^3.1161.0`
+
+**Revisions:**
+
+- 2026-11-04 — _(library-pinning note from plan-resolve — confirmed by user 2026-11-04)_ Both `S3Client` instances (internal and public, TD-06) set `requestChecksumCalculation: 'WHEN_REQUIRED'` and `responseChecksumValidation: 'WHEN_REQUIRED'`, plus `forcePathStyle: true`. Rationale: since the SDK's default data-integrity protections (`WHEN_SUPPORTED`), `UploadPart`/`PutObject` get a default CRC32 checksum algorithm; presigned part URLs would then require checksum headers the client cannot compute per part, and S3-compatible servers may reject them (confirmed via Context7 `/aws/aws-sdk-js-v3`, flexible-checksums middleware).
 
 ### phase-03-videos/TD-03
 
 **Recommendation:** Single start call creates draft + multipart session — matches the capability literally, keeps one resource and one table, and the extra `upload_id` column is cheap; Option B's flexibility (re-upload) is not required by any Phase 03 bullet. Endpoints are authenticated (global JWT guard) and the draft belongs to the caller's channel.
 
 **Libraries:** —
+
+**Revisions:**
+
+- 2026-11-04 — _(proposed by plan-resolve — confirmed by user 2026-11-04)_ Upload-session contract carried into the plan (AMB-5). Re-extracted from Option A's body and completed. All routes are authenticated (global JWT guard). They are owner-scoped: a video not owned by the caller's channel answers `404 VIDEO_NOT_FOUND`, the same as a missing one. Errors use the `{ statusCode, error, message }` envelope (phase-02-auth/TD-07). (1) `POST /videos` takes `{ title?: string (1–100), filename: string (1–255), size: integer 1..10 GiB, contentType: string matching ^video/ }`. It returns `201 { id, slug, status: 'draft', partSize, partCount }`, with `partSize` = 64 MiB and `partCount = ceil(size / partSize)`. The S3 `uploadId` stays server-side on the row and is not exposed (refines the Option A sketch). If `title` is omitted it defaults to `filename` without extension. (2) `POST /videos/:id/upload/parts` takes `{ partNumbers: integer[] }` (unique, each 1..partCount, 1..partCount entries). It returns `200 { parts: [{ partNumber, url }], expiresAt }` (presigned `UploadPart`, TTL 1h, public endpoint). (3) `GET /videos/:id/upload/parts` returns `200 { parts: [{ partNumber, etag, size }] }` from `ListParts`, paginated internally, for resume. (4) `POST /videos/:id/upload/complete` takes `{ parts: [{ partNumber, etag }] }` (exactly partCount entries, ascending). The sequence is: `CompleteMultipartUpload`, then `HeadObject`, then the size check, then `draft → processing` (clears `upload_id`, sets `processing_started_at`) and commit, then enqueue (TD-13). It returns `200 { id, slug, status: 'processing' }`. A repeated call on a `processing` video returns the same 200 and re-adds the deterministic job (idempotent). On `ready`/`failed` it returns `409 VIDEO_UPLOAD_NOT_ACTIVE`. Storage `InvalidPart`/`InvalidPartOrder` returns `400 UPLOAD_PARTS_INVALID`; the video stays `draft` and the client can resume. If `HeadObject` size ≠ declared size, the object is deleted, the video becomes `failed`/`UPLOAD_SIZE_MISMATCH`, and the call returns `422 UPLOAD_SIZE_MISMATCH`. (5) `DELETE /videos/:id/upload` (user abort) is allowed only in `draft`. It calls `AbortMultipartUpload` (`NoSuchUpload` is tolerated) and moves the row to `failed` with `failure_reason = 'UPLOAD_ABORTED'` and `upload_id = null`. It returns `204`; on a non-`draft` video it returns `409 VIDEO_UPLOAD_NOT_ACTIVE`. Routes (2), (3) and (5) on a non-`draft` video also answer `409 VIDEO_UPLOAD_NOT_ACTIVE`. Rationale: validation AMB-5. Cross-layer TDs feed `### API Contracts`. An abort kept as `failed` with a reason mirrors TD-04's `UPLOAD_EXPIRED`, keeps the operation idempotent and auditable, and leaves hard deletion of videos to Phase 04 (video management).
 
 ### phase-03-videos/TD-04
 
@@ -117,13 +139,21 @@ _Source files:_
 
 **Recommendation:** Internal endpoint for operations, public endpoint for presigning — the standard fix for SigV4 host binding that works the same in Docker and in production without host hacks; wrap both clients behind a single storage service so callers never choose.
 
-**Libraries:** —
+**Libraries:** `@aws-sdk/client-s3@^3.1161.0`, `@aws-sdk/s3-request-presigner@^3.1161.0`
+
+**Revisions:**
+
+- 2026-11-04 — Testing override (IC-1, user-decided): inside containers (integration/e2e suites in `nestjs-api`, and the `video-worker`), presigned URLs that the container itself consumes are signed with the internal endpoint. The test env sets `S3_PUBLIC_ENDPOINT` equal to `S3_ENDPOINT` (`http://minio:9000`), so e2e tests can PUT presigned parts and follow the stream/download 302 from inside the container. The worker always signs its ffprobe/ffmpeg GET URLs with the internal client. Rationale: a SigV4 presigned URL binds the host, so a URL signed for `localhost:9000` is unreachable from inside a container.
 
 ### phase-03-videos/TD-07
 
 **Recommendation:** `pgsty/silo`, pinned `RELEASE.*` tag — a pullable, pinned, maintained drop-in that keeps the "MinIO locally" premise and its env/command conventions; since all code talks S3 via the AWS SDK, swapping the image later costs only a Compose change. Bucket creation can be a one-shot `pgsty/mc` init service or an idempotent `CreateBucket` at app startup (implementation detail for the plan).
 
-**Libraries:** —
+**Libraries:** `pgsty/silo:RELEASE.2026-10-26T00-00-00Z`, `pgsty/mc:RELEASE.2026-10-26T00-00-00Z` (Docker images)
+
+**Revisions:**
+
+- 2026-11-04 — Testing override (IC-1, user-decided): storage-dependent services, the worker and e2e tests run against this real Silo Compose service via `S3_ENDPOINT=http://minio:9000` (the Compose service name). No local-filesystem storage adapter is built: for this phase this overrides `testing-guide-nestjs-project` `references/external-systems.md` ("use the local filesystem adapter"). There are no `localhost` defaults. The bucket is created idempotently before use (init service or startup `CreateBucket`), and tests isolate by unique `videos/{videoId}/` keys. Image pin refreshed to the latest Silo/mc release available on 2026-11-04 (`RELEASE.2026-10-26T00-00-00Z`). Rationale: a filesystem adapter cannot exercise presigned multipart, `ListParts`, `HeadObject`, endpoint signing or the presigned GET that ffmpeg reads (TD-02/06/09/11), so tests would not cover the contracts the phase delivers.
 
 ### phase-03-videos/TD-08
 
@@ -135,7 +165,12 @@ _Source files:_
 
 **Recommendation:** Apt ffmpeg + `execFile` wrapper + presigned GET input — avoids a 10GB local copy and any deprecated wrapper, keeps the worker image simple; if HTTP seeking proves slow or flaky in tests, Option B is a contained fallback inside the same wrapper. ffprobe failure (non-video file) is a non-retryable error (TD-12).
 
-**Libraries:** —
+**Libraries:** `ffmpeg` / `ffprobe` 5.1.x (Debian 12 bookworm apt package `ffmpeg`, `7:5.1.9-0+deb12u1` on 2026-11-04)
+
+**Revisions:**
+
+- 2026-11-04 — _(proposed by plan-resolve — confirmed by user 2026-11-04)_ Persisted metadata (AMB-2). Columns on `videos` set at upload start: `original_filename varchar(255) NOT NULL` (download `Content-Disposition`, TD-11), `content_type varchar(127) NOT NULL` (declared `video/*`), and `size_bytes bigint NOT NULL` (declared, re-verified with `HeadObject` at completion; mapped to `number` via a column transformer since ≤ 10 GiB < 2^53). Columns set by the worker on `processing → ready` (nullable until then): `duration_ms integer` (`round(format.duration × 1000)` from ffprobe), `width integer` and `height integer` (coded dimensions of the first `codec_type = video` stream; rotation side-data ignored in Phase 03), and `video_codec varchar(32)` (that stream's `codec_name`). Not persisted: bitrate, frame rate, audio streams, container `format_name` and the raw ffprobe JSON (no Phase 03 consumer). Invalid media → `UnrecoverableError` with reason `INVALID_MEDIA`. That covers ffprobe exiting non-zero or with unparsable JSON, no video stream, or a missing/non-positive duration. Rationale: validation AMB-2. This is the minimal set that satisfies "extração de duração e metadados" and gives later phases (player, listings) dimensions and codec without a new migration.
+- 2026-11-04 — _(proposed by plan-resolve — confirmed by user 2026-11-04)_ Thumbnail parameters (AMB-3). Frame offset `t = min(1 s, duration / 2)`, using input seeking (`-ss t` before `-i`) so only nearby bytes are fetched over HTTP. Command: `ffmpeg -v error -ss <t> -i <internal presigned GET> -frames:v 1 -vf "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2" -q:v 3 -f mjpeg pipe:1`. That is a JPEG that fits inside 1280×720, keeps the aspect ratio, never upscales and has even dimensions; the filter options were verified on the bookworm 5.1.9 binary. stdout is collected via `execFile` with `maxBuffer` 10 MiB and uploaded with `PutObject` to `videos/{videoId}/thumbnail.jpg` (`ContentType: image/jpeg`); the key goes in `thumbnail_key varchar(255)`. Fallback: if no frame comes back at `t > 0`, retry once at `t = 0` within the same attempt. If that also yields nothing → `UnrecoverableError` with reason `THUMBNAIL_FAILED`, and the whole job fails: a `ready` video always has a thumbnail. Transient errors (storage/network, `execFile` timeout of 120 s per ffprobe/ffmpeg call) are thrown normally and retried per TD-12. Rationale: validation AMB-3. The capability requires a thumbnail, and a single `ready` invariant (metadata + thumbnail present) is simpler for later consumers than a partially processed `ready`.
 
 ### phase-03-videos/TD-10
 
@@ -147,7 +182,7 @@ _Source files:_
 
 **Recommendation:** 302 redirect to short-lived presigned GET, with `ResponseContentDisposition` for download — delegates Range/206 to the storage that already implements it, keeps the API out of the data path, and matches the architecture diagram; only `ready` videos are redirectable (TD-12).
 
-**Libraries:** —
+**Libraries:** `@aws-sdk/s3-request-presigner@^3.1161.0`
 
 ### phase-03-videos/TD-12
 
@@ -155,17 +190,30 @@ _Source files:_
 
 **Libraries:** —
 
+**Revisions:**
+
+- 2026-11-04 — Status semantics (AMB-4, user-decided): `status` is the processing lifecycle only. `draft` = pre-registered, upload not yet completed. The Phase 03 "rascunho" capability is satisfied by the pre-registered row. The enum keeps `draft | processing | ready | failed` because the exercise's acceptance criterion literally names "rascunho → processando → pronto/erro". Phase 04 adds an independent publication/visibility field and does not reuse or rename this enum. `failure_reason varchar(32) NULL` holds one of `UPLOAD_EXPIRED` (TD-04), `UPLOAD_ABORTED` and `UPLOAD_SIZE_MISMATCH` (TD-03), `INVALID_MEDIA` and `THUMBNAIL_FAILED` (TD-09), and `PROCESSING_FAILED` (retries exhausted / stalled / sweeper). It is typed as a TS union, not a PG enum, so codes can be added without an enum migration. Rationale: validation AMB-4. This avoids overloading `draft` with Phase 04's "unpublished" meaning.
+- 2026-11-04 — _(proposed by plan-resolve — confirmed by user 2026-11-04)_ Terminal failure write (AMB-1). The terminal `processing → failed` write lives in the processor's `@OnWorkerEvent('failed')` handler (`@nestjs/bullmq`), not in `process()`. It acts when `job` is defined and either the error is an `UnrecoverableError` or `job.attemptsMade >= job.opts.attempts`. It runs a guarded `UPDATE videos SET status='failed', failure_reason=<code> WHERE id = job.data.videoId AND status='processing'`. `<code>` is the processing error's domain code (`INVALID_MEDIA` / `THUMBNAIL_FAILED`) or `PROCESSING_FAILED` otherwise. The handler never throws; it logs its own errors. Job options: `attempts: 3`, `backoff: { type: 'exponential', delay: 10000 }`, `removeOnComplete: true`, `removeOnFail: { count: 1000 }`. The `failed` event may carry `job === undefined`, as with jobs failed for exceeding `maxStalledCount` (default 1); those are reconciled by the TD-13 sweeper. Rationale: validation AMB-1. One place covers both thrown-error paths; the sweeper covers the cases the event cannot (BullMQ docs v6.5.3: Workers/events, Stalled jobs, Stop retrying jobs).
+
 ### phase-03-videos/TD-13
 
 **Recommendation:** Commit, then enqueue with `jobId = videoId`; idempotent completion; sweeper backstop — closes the dual-write gap with mechanisms already chosen (BullMQ dedupe + TD-04 scheduler) without introducing an outbox. If pg-boss were chosen in TD-01 instead, the enqueue could share the DB transaction and this TD would collapse.
 
 **Libraries:** —
 
+**Revisions:**
+
+- 2026-11-04 — _(proposed by plan-resolve — confirmed by user 2026-11-04)_ Sweeper reconciliation for `processing` (AMB-1). The TD-04 Job Scheduler (`upsertJobScheduler('video-sweeper', { every: VIDEO_SWEEPER_INTERVAL_MS })`, default 15 min) also scans videos in `processing` whose `processing_started_at` (new `timestamptz NULL` column, set on `draft → processing`) is older than `VIDEO_PROCESSING_STUCK_AFTER_MS` (default 30 min). For each, it calls `queue.getJob(videoId)` and `job.getState()`. (a) Job missing / state `unknown` (the dual-write gap or an evicted job): re-add with `jobId = videoId`. (b) State `failed`: write terminal `failed`/`PROCESSING_FAILED` with the same guarded UPDATE. There is no remove-and-re-add, consistent with "no reprocess" in TD-12, and the retained failed job is why a plain re-add would be a silent no-op. (c) State `completed` while the row is still `processing` (anomaly): `job.remove()` then re-add. (d) `waiting` / `delayed` / `prioritized` / `active` / `waiting-children`: leave it alone. Known edge: if `removeOnFail` evicted a failed job before the sweeper saw it, the video is re-enqueued once more (bounded by 3 attempts). Rationale: validation AMB-1. BullMQ ignores `add` for an existing `jobId`, including retained failed/completed jobs, so the sweeper must branch on job state.
+
 ### phase-03-videos/TD-14
 
 **Recommendation:** Public by unique slug, `ready` only — consistent with the platform's anonymous-viewing premise and with TD-10's unguessable ids, and keeps the stream/download contract stable for Phase 05; Phase 04 then adds the publication/visibility gate. Upload and completion endpoints remain authenticated and owner-scoped.
 
 **Libraries:** —
+
+**Revisions:**
+
+- 2026-11-04 — Phase 04 boundary (AMB-4, user-decided): the Phase 03 gate for public stream/download is `status = 'ready'` only. Phase 04 adds the separate publication/visibility field (TD-12 revision) and tightens these same routes to also require publication. The route shapes and the 302 contract (TD-11) do not change. Rationale: validation AMB-4. It makes the planned behaviour change explicit so Phase 04 plans it rather than discovers it.
 
 ## Inherited Decisions Detail
 
@@ -373,6 +421,14 @@ _(from `testing-guide-nestjs-project` — `artifacts/future-types.md`, artifact 
 | Queue consumer / processor with business logic | Unit (mock deps) + Integration (real DB/storage) |
 | Queue consumer / processor with only external system calls | Integration (real systems) |
 | Scheduled task | Unit and/or Integration on the method itself — do not test that the schedule triggers |
+
+**Phase 03 testing override** _(validation IC-1, user-decided 2026-11-04; recorded as `**Revisions:**` on phase-03-videos/TD-01, TD-06, TD-07)_. These rules take precedence over the guide rows above:
+
+- **Storage:** the "or local adapter" option in the *Service with side-effect dep* row does **not** apply. Storage-dependent services, the video worker/processor and e2e tests run against the real Silo (MinIO) Compose service via `S3_ENDPOINT=http://minio:9000`. No local-filesystem storage adapter is built.
+- **Queue:** queue producers, the processor and the sweeper run against the real Redis Compose service via `REDIS_HOST=redis`. There is no in-memory queue fake.
+- **Hosts:** no `localhost` defaults in config factories, Joi schema defaults or test helpers; always use Compose service names (root `CLAUDE.md` Docker networking).
+- **Presigned URLs in containers:** URLs that a container consumes itself (e2e part PUTs, following the stream/download 302, worker ffprobe/ffmpeg input) are signed with the internal endpoint. The test env sets `S3_PUBLIC_ENDPOINT` = `S3_ENDPOINT`.
+- Updating `testing-guide-nestjs-project` (`references/external-systems.md`) to match is a separate follow-up, out of scope for this phase.
 
 ### next-frontend
 
