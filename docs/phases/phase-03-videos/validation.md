@@ -1,11 +1,11 @@
 ---
 kind: phase
 name: phase-03-videos
-status: dirty
+status: clean
 issue_count: 0
 sources_mtime:
-  docs/phases/phase-03-videos/context.md: "2026-11-04T15:35:36-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-04T15:35:25-03:00"
+  docs/phases/phase-03-videos/context.md: "2026-11-07T05:34:45-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-07T05:33:08-03:00"
 issues:
   - id: IC-1
     status: resolved
@@ -99,6 +99,15 @@ _None._
 ### UI Coverage Gaps
 
 _None._
+
+## Non-blocking Notes
+
+_Re-validation pass 2 (2026-11-07). These are informational. They are not issues, do not affect `status`, and `/plan-build` can settle them when it drafts the SIs._
+
+- **Producer job options.** The worker registers `video-processing` with the TD-12 `defaultJobOptions` (TD-13 revision). The API's own `registerQueue` for `video-processing` must carry the same options too, because jobs added by the API take that Queue's defaults. Without them `job.opts.attempts` is unset, so there are no retries and the TD-12 `failed` handler's `attemptsMade >= opts.attempts` never matches. Suggestion: one shared options constant used by both registrations.
+- **Abort/expiry racing with `complete`.** The user abort (TD-03, AMB-7) and the draft expiry (TD-04, AMB-6) both run `DeleteObject` on the original before their guarded `UPDATE … WHERE status = 'draft'`. If a concurrent `complete` wins, the row moves to `processing` and the original is already gone, so the worker ends it as `failed`/`SOURCE_MISSING`. That is still a consistent terminal state. The abort response when its guarded update matches no row is not stated; `409 VIDEO_UPLOAD_NOT_ACTIVE` fits the existing contract.
+- **Env names left to the plan.** TD-08's env-configurable worker concurrency has no variable name yet, and the static `@Processor(…, { concurrency: 1 })` option cannot read config, so the plan picks the mechanism (for example, set the worker's concurrency from config at module init). The same goes for the bucket, region, credentials and Redis port variables. Follow the phase-01 conventions: namespaced `registerAs` factories, Joi validation, no `localhost` defaults.
+- **Title length unit.** IC-2 counts cuts in Unicode code points. Validating a provided title with class-validator `MaxLength(100)` counts UTF-16 units, which rejects some titles with astral characters (such as emoji) that the column would accept. This only matters at the edge. Using code points for both keeps the rule consistent.
 
 ## Resolved Issues
 
