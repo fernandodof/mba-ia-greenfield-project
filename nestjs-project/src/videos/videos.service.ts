@@ -3,11 +3,16 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { UploadSessionNotFoundError } from '../storage/storage.errors';
+import {
+  InvalidUploadPartsError,
+  UploadSessionNotFoundError,
+} from '../storage/storage.errors';
 import { StorageService } from '../storage/storage.service';
+import type { CompletedPartDto } from './dto/complete-upload.dto';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import type { SignedUploadPartsDto } from './dto/signed-upload-parts.dto';
 import type { UploadedPartsDto } from './dto/uploaded-parts.dto';
+import type { VideoProcessingStartedDto } from './dto/video-processing-started.dto';
 import type { VideoUploadSessionDto } from './dto/video-upload-session.dto';
 import { Video } from './entities/video.entity';
 import {
@@ -16,12 +21,14 @@ import {
   VIDEO_PART_SIZE_BYTES,
 } from './video.constants';
 import { VideoLifecycleService } from './video-lifecycle.service';
+import { VideoProcessingQueue } from './video-processing.queue';
 import { generateVideoSlug } from './video-slug.util';
 import { originalKey } from './video-storage-keys';
 import { deriveVideoTitle } from './video-title.util';
 import { VideoStatus } from './video.types';
 import {
   UploadPartsInvalidException,
+  UploadSizeMismatchException,
   VideoNotFoundException,
   VideoUploadNotActiveException,
 } from './videos.exceptions';
@@ -57,6 +64,17 @@ function isSlugUniqueViolation(err: unknown): boolean {
   );
 }
 
+// `complete` needs every part, once, in order: exactly 1..partCount.
+function isCompletePartList(
+  parts: CompletedPartDto[],
+  partCount: number,
+): boolean {
+  return (
+    parts.length === partCount &&
+    parts.every((part, index) => part.partNumber === index + 1)
+  );
+}
+
 @Injectable()
 export class VideosService {
   constructor(
@@ -65,6 +83,7 @@ export class VideosService {
     private readonly channelsService: ChannelsService,
     private readonly storage: StorageService,
     private readonly lifecycle: VideoLifecycleService,
+    private readonly processingQueue: VideoProcessingQueue,
   ) {}
 
   /**
@@ -201,6 +220,81 @@ export class VideosService {
     if (!failed) {
       throw new VideoUploadNotActiveException();
     }
+  }
+
+  /**
+   * Completes the owner's upload and starts processing (TD-03, TD-13):
+   * `CompleteMultipartUpload` → `HeadObject` size check → guarded
+   * `draft → processing` → enqueue (after the commit, `jobId = videoId`).
+   * Idempotent: a `processing` video re-adds its deterministic job, and a
+   * `NoSuchUpload` whose object already exists (storage completed, DB commit
+   * lost) continues from the size check (AMB-7).
+   */
+  async completeUpload(
+    userId: string,
+    id: string,
+    parts: CompletedPartDto[],
+  ): Promise<VideoProcessingStartedDto> {
+    const video = await this.findOwnedById(userId, id);
+    if (video.status === VideoStatus.PROCESSING) {
+      await this.processingQueue.enqueue(id);
+      return this.processingStarted(video);
+    }
+
+    const uploadId = this.activeUploadId(video);
+    if (!isCompletePartList(parts, computePartCount(video.size_bytes))) {
+      throw new UploadPartsInvalidException();
+    }
+
+    const key = originalKey(id);
+    await this.completeStoredUpload(key, uploadId, parts);
+
+    const stored = await this.storage.headObject(key);
+    if (!stored) {
+      // The session is gone and nothing was stored: the sweeper expires it.
+      throw new VideoUploadNotActiveException();
+    }
+    if (stored.size !== video.size_bytes) {
+      await this.storage.deleteObject(key);
+      await this.lifecycle.failDraft(id, 'UPLOAD_SIZE_MISMATCH');
+      throw new UploadSizeMismatchException();
+    }
+
+    const moved = await this.lifecycle.markProcessing(id);
+    if (!moved) {
+      // Another actor moved the row first; only a concurrent `complete`
+      // (now `processing`) is a success for this call.
+      const current = await this.findOwnedById(userId, id);
+      if (current.status !== VideoStatus.PROCESSING) {
+        throw new VideoUploadNotActiveException();
+      }
+    }
+
+    await this.processingQueue.enqueue(id);
+    return this.processingStarted(video);
+  }
+
+  // `NoSuchUpload` is not an error here: storage may have completed the
+  // upload before a crash, so the following HeadObject decides (AMB-7).
+  private async completeStoredUpload(
+    key: string,
+    uploadId: string,
+    parts: CompletedPartDto[],
+  ): Promise<void> {
+    try {
+      await this.storage.completeMultipartUpload(key, uploadId, parts);
+    } catch (err) {
+      if (err instanceof InvalidUploadPartsError) {
+        throw new UploadPartsInvalidException();
+      }
+      if (!(err instanceof UploadSessionNotFoundError)) {
+        throw err;
+      }
+    }
+  }
+
+  private processingStarted(video: Video): VideoProcessingStartedDto {
+    return { id: video.id, slug: video.slug, status: VideoStatus.PROCESSING };
   }
 
   // Only a `draft` has an upload session; any other status (or a draft whose

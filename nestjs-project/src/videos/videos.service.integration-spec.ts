@@ -1,12 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { getQueueToken } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import type { Queue } from 'bullmq';
 import { DataSource, type Repository } from 'typeorm';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { Channel } from '../channels/entities/channel.entity';
+import redisConfig from '../config/redis.config';
 import storageConfig from '../config/storage.config';
+import { QueueModule } from '../queue/queue.module';
 import { UploadSessionNotFoundError } from '../storage/storage.errors';
 import { StorageService } from '../storage/storage.service';
 import {
@@ -15,12 +19,17 @@ import {
 } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
 import { Video } from './entities/video.entity';
+import {
+  VIDEO_PROCESSING_QUEUE,
+  type VideoProcessingJobData,
+} from './video-queue.constants';
 import { originalKey } from './video-storage-keys';
 import { VideoStatus } from './video.types';
 import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
 
-// Real Postgres + the real `minio` Compose service (Phase 03 override IC-1).
+// Real Postgres + the real `minio` and `redis` Compose services (Phase 03
+// override IC-1); the queue uses the `bull-test` prefix and no worker runs.
 const ALL_ENTITIES = [User, Channel, RefreshToken, VerificationToken, Video];
 
 describe('VideosService (integration)', () => {
@@ -31,12 +40,17 @@ describe('VideosService (integration)', () => {
   let userRepository: Repository<User>;
   let channelRepository: Repository<Channel>;
   let videoRepository: Repository<Video>;
+  let queue: Queue<VideoProcessingJobData>;
   const openSessions: { key: string; uploadId: string }[] = [];
 
   beforeAll(async () => {
     module = await Test.createTestingModule({
       imports: [
-        ConfigModule.forRoot({ isGlobal: true, load: [storageConfig] }),
+        ConfigModule.forRoot({
+          isGlobal: true,
+          load: [storageConfig, redisConfig],
+        }),
+        QueueModule,
         TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
         VideosModule,
       ],
@@ -48,17 +62,28 @@ describe('VideosService (integration)', () => {
     userRepository = dataSource.getRepository(User);
     channelRepository = dataSource.getRepository(Channel);
     videoRepository = dataSource.getRepository(Video);
+    queue = module.get<Queue<VideoProcessingJobData>>(
+      getQueueToken(VIDEO_PROCESSING_QUEUE),
+    );
   }, 30000);
 
   afterAll(async () => {
     for (const { key, uploadId } of openSessions) {
       await storage.abortMultipartUpload(key, uploadId);
     }
+    for (const row of await videoRepository.find()) {
+      await storage.deleteObject(originalKey(row.id));
+    }
+    await queue.obliterate({ force: true });
     await module.close();
   });
 
   beforeEach(async () => {
+    for (const row of await videoRepository.find()) {
+      await storage.deleteObject(originalKey(row.id));
+    }
     await cleanAllTables(dataSource);
+    await queue.obliterate({ force: true });
   });
 
   let counter = 0;
@@ -233,6 +258,130 @@ describe('VideosService (integration)', () => {
         status: VideoStatus.FAILED,
         failure_reason: 'UPLOAD_ABORTED',
       });
+    });
+  });
+
+  describe('completeUpload', () => {
+    // Uploads `bytes` as part 1 of a draft declared with `declaredSize`.
+    async function uploadDraft(
+      userId: string,
+      bytes: Buffer,
+      declaredSize = bytes.length,
+    ) {
+      const session = await service.startUpload(userId, {
+        filename: 'clip.mp4',
+        size: declaredSize,
+        contentType: 'video/mp4',
+      });
+      const row = await videoRepository.findOneByOrFail({ id: session.id });
+      openSessions.push({ key: originalKey(row.id), uploadId: row.upload_id! });
+      const signed = await service.signUploadParts(userId, session.id, [1]);
+      const put = await fetch(signed.parts[0].url, {
+        method: 'PUT',
+        body: new Uint8Array(bytes),
+      });
+      expect(put.status).toBe(200);
+      const etag = put.headers.get('etag')!;
+      return { session, row, parts: [{ partNumber: 1, etag }] };
+    }
+
+    it('moves the row to processing and enqueues one job with attempts: 3', async () => {
+      const user = await createUserWithChannel();
+      const { session, parts } = await uploadDraft(user.id, randomBytes(2048));
+
+      await expect(
+        service.completeUpload(user.id, session.id, parts),
+      ).resolves.toEqual({
+        id: session.id,
+        slug: session.slug,
+        status: VideoStatus.PROCESSING,
+      });
+
+      const row = await videoRepository.findOneByOrFail({ id: session.id });
+      expect(row.status).toBe(VideoStatus.PROCESSING);
+      expect(row.upload_id).toBeNull();
+      expect(row.processing_started_at).toBeInstanceOf(Date);
+      await expect(
+        storage.headObject(originalKey(session.id)),
+      ).resolves.toEqual({ size: 2048 });
+      const job = await queue.getJob(session.id);
+      expect(job?.data).toEqual({ videoId: session.id });
+      expect(job?.opts.attempts).toBe(3);
+    });
+
+    it('is idempotent: a second call returns the same body and keeps one job', async () => {
+      const user = await createUserWithChannel();
+      const { session, parts } = await uploadDraft(user.id, randomBytes(2048));
+      const first = await service.completeUpload(user.id, session.id, parts);
+      const startedAt = (
+        await videoRepository.findOneByOrFail({ id: session.id })
+      ).processing_started_at;
+
+      await expect(
+        service.completeUpload(user.id, session.id, parts),
+      ).resolves.toEqual(first);
+
+      const jobs = await queue.getJobs(['waiting', 'delayed', 'active']);
+      expect(jobs.map((job) => job.id)).toEqual([session.id]);
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toMatchObject({
+        status: VideoStatus.PROCESSING,
+        processing_started_at: startedAt,
+      });
+    });
+
+    it('recovers when storage already completed the upload but the row is still a draft', async () => {
+      const user = await createUserWithChannel();
+      const { session, row, parts } = await uploadDraft(
+        user.id,
+        randomBytes(2048),
+      );
+      await storage.completeMultipartUpload(
+        originalKey(row.id),
+        row.upload_id!,
+        parts,
+      );
+
+      await expect(
+        service.completeUpload(user.id, session.id, parts),
+      ).resolves.toMatchObject({ status: VideoStatus.PROCESSING });
+
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toMatchObject({
+        status: VideoStatus.PROCESSING,
+        upload_id: null,
+      });
+      await expect(queue.getJob(session.id)).resolves.toBeDefined();
+    });
+
+    it('deletes the object and fails the draft as UPLOAD_SIZE_MISMATCH when the size differs', async () => {
+      const user = await createUserWithChannel();
+      const { session, parts } = await uploadDraft(
+        user.id,
+        randomBytes(1024),
+        2048,
+      );
+
+      await expect(
+        service.completeUpload(user.id, session.id, parts),
+      ).rejects.toMatchObject({
+        errorCode: 'UPLOAD_SIZE_MISMATCH',
+        httpStatus: 422,
+      });
+
+      await expect(
+        storage.headObject(originalKey(session.id)),
+      ).resolves.toBeNull();
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toMatchObject({
+        status: VideoStatus.FAILED,
+        failure_reason: 'UPLOAD_SIZE_MISMATCH',
+        upload_id: null,
+      });
+      await expect(queue.getJob(session.id)).resolves.toBeUndefined();
     });
   });
 });

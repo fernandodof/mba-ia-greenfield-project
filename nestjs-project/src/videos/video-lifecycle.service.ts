@@ -31,4 +31,21 @@ export class VideoLifecycleService {
     // The postgres driver always reports `affected` (pg `rowCount`).
     return (result.affected ?? 0) > 0;
   }
+
+  /**
+   * `draft → processing` once the upload is stored (TD-03, TD-13): clears the
+   * upload session and stamps `processing_started_at` with the DB clock, which
+   * the sweeper compares against `now()` to find stuck videos.
+   */
+  async markProcessing(id: string): Promise<boolean> {
+    const result = await this.videoRepository.update(
+      { id, status: VideoStatus.DRAFT },
+      {
+        status: VideoStatus.PROCESSING,
+        upload_id: null,
+        processing_started_at: () => 'now()',
+      },
+    );
+    return (result.affected ?? 0) > 0;
+  }
 }

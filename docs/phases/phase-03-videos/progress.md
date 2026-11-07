@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/16 completed
+**SIs:** 9/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -109,9 +109,19 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.9 — Complete Upload and Enqueue Processing (POST /videos/:id/upload/complete)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 41 passing: `src/videos/videos.service.spec.ts` +16 (unit, now 44), `src/videos/videos.service.integration-spec.ts` +4 (real DB + `minio` + `redis`, now 13), `src/videos/video-processing.queue.integration-spec.ts` 4 (new, real `redis`, `bull-test` prefix), `src/videos/video-lifecycle.service.integration-spec.ts` +6 (now 12), and `test/videos-upload-complete.e2e-spec.ts` 11, which covers all 11 scenarios of `nestjs-project/specs/videos-upload-complete.plan.md`. `videos.module.spec.ts` also asserts that `VideoProcessingQueue` and the `video-processing` queue (with `attempts: 3` defaults) resolve. Full suites: 36 suites / 293 tests; e2e 7 suites / 93 tests.
+- **Observations:**
+  - `VideoProcessingQueue` (`src/videos/video-processing.queue.ts`): `enqueue` = `add('process', { videoId }, { jobId: videoId })`, with the options taken from the queue's `defaultJobOptions`. `getJobState` returns `'missing'` when `getJob` is `undefined`, otherwise `job.getState()`. `removeJob` = `queue.remove(videoId)`. `VideosModule` holds the only `BullModule.registerQueue({ name: VIDEO_PROCESSING_QUEUE, defaultJobOptions: VIDEO_PROCESSING_JOB_OPTIONS })` and exports `VideoProcessingQueue` + `VideoLifecycleService`. The API now opens a Redis connection at boot. Unit, integration and e2e runs still exit on their own, and so does `openapi:export`.
+  - `VideoLifecycleService.markProcessing` is `repository.update({ id, status: 'draft' }, { status: 'processing', upload_id: null, processing_started_at: () => 'now()' })`. It uses the DB clock, like the sweeper's thresholds. Function-style values are documented for the 0.3.28 update builder, and `Repository.update` accepts them through `QueryDeepPartialEntity`.
+  - `completeUpload` makes a single `HeadObject` call after `CompleteMultipartUpload`. A storage `NoSuchUpload` is caught and execution falls through to that call (AMB-7): a `null` result → 409 with the row left `draft`. As a consequence, a `null` right after a *successful* complete (an anomaly) also answers 409. On a size mismatch the service throws `UploadSizeMismatchException` even when `failDraft` returns `false` (a concurrent actor moved the row first); the plan names no branch for that race.
+  - Part check: the list must be exactly `1..partCount` (`length === partCount` and `parts[i].partNumber === i + 1`). Besides the plan's cases, this also rejects gaps and extra parts. A `draft` with a NULL `upload_id` reuses the `activeUploadId` guard and answers 409, the choice already accepted in SI-03.7/03.8.
+  - Controller: `@Post(':id/upload/complete')` + `@HttpCode(200)`, `ParseUUIDPipe`, and `@ApiResponse` for 200 (`VideoProcessingStartedDto`) and 400/401/404/409/422 (`ApiErrorEnvelope`). `CompletedPartDto` lives in `complete-upload.dto.ts`, the same nested-DTO pattern as SI-03.7. `openapi.json` only gained lines (+127). The `CompleteUploadDto` request schema is empty, which is the known pre-existing follow-up.
+  - Test setup: `videos.module.spec.ts` and `videos.service.integration-spec.ts` now load `redisConfig` + `QueueModule`, because `VideosModule` registers a queue. The service integration spec also deletes `videos/{id}/original` objects and obliterates the `bull-test` queue in `beforeEach`/`afterAll`. The e2e spec obliterates in `beforeEach`/`afterAll` as the spec requires, and its `describe` label is the feature stem `videos-upload-complete`.
+  - After the runs only `bull-test:video-processing:meta` is left in Redis: each `AppModule` boot (auth/swagger/app e2e suites) writes the queue's metadata key, and no job keys remain. `bull:video-processing:meta` comes from `openapi:export` and the boot check (dev prefix).
+  - Extra tests beyond the plan table: 4 part-list cases in an `it.each` (fewer, descending, gap, extra), a guarded-update miss that leaves another status, a different storage error rethrown, not-owned propagation, `removeJob`, and "updates only the targeted draft" for `markProcessing`.
+  - context7: `/nestjs/bull` (`registerQueue`/`defaultJobOptions`, `@InjectQueue`, `getQueueToken` = `BullQueue_<name>`); `/taskforcesh/bullmq` (duplicate `jobId` ignored, `getJob`, `getState`, `remove` throws for locked jobs; the installed 6.7.1 typings match: `getState(): Promise<JobState | 'unknown'>`); `/typeorm/typeorm/0.3.28` (`Repository.update`, function-style raw values); `/typestack/class-validator` (`ValidateNested({ each: true })`, array sizes; 0.14.4 installed); `/nestjs/swagger` (`getSchemaPath`). No mismatch affects this code.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.10 — Streaming and Download by Unique Slug (GET /videos/:slug/stream, GET /videos/:slug/download)
 - **Status:** pending

@@ -20,10 +20,12 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { SignUploadPartsDto } from './dto/sign-upload-parts.dto';
 import { SignedUploadPartsDto } from './dto/signed-upload-parts.dto';
 import { UploadedPartsDto } from './dto/uploaded-parts.dto';
+import { VideoProcessingStartedDto } from './dto/video-processing-started.dto';
 import { VideoUploadSessionDto } from './dto/video-upload-session.dto';
 import { VideoDto } from './dto/video.dto';
 import { VideosService } from './videos.service';
@@ -176,6 +178,55 @@ export class VideosController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<UploadedPartsDto> {
     return this.videosService.listUploadedParts(user.sub, id);
+  }
+
+  @Post(':id/upload/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Complete a video upload',
+    description:
+      "Completes the multipart upload of the caller's draft video, checks the stored size, moves the video to processing and enqueues its processing job. Idempotent: repeating the call on a processing video returns the same response.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload completed and processing started',
+    type: VideoProcessingStartedDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Validation failed (VALIDATION_ERROR), or the parts are not exactly the video parts in ascending order or were rejected by storage (UPLOAD_PARTS_INVALID; the video stays a draft)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found or not owned by the caller',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The video is ready or failed, or its storage upload is gone with nothing stored (VIDEO_UPLOAD_NOT_ACTIVE)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 422,
+    description:
+      'The stored size differs from the declared size; the object is deleted and the video fails (UPLOAD_SIZE_MISMATCH)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteUploadDto,
+  ): Promise<VideoProcessingStartedDto> {
+    return this.videosService.completeUpload(user.sub, id, dto.parts);
   }
 
   @Delete(':id/upload')

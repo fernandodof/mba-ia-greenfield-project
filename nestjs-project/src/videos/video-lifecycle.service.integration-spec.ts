@@ -134,4 +134,61 @@ describe('VideoLifecycleService (integration)', () => {
       ).resolves.toBe(false);
     });
   });
+
+  describe('markProcessing', () => {
+    it('moves a draft to processing, clears upload_id and stamps processing_started_at', async () => {
+      const id = await insertVideo(VideoStatus.DRAFT, 'upload-1');
+      const before = new Date();
+
+      await expect(lifecycle.markProcessing(id)).resolves.toBe(true);
+
+      const row = await videoRepository.findOneByOrFail({ id });
+      expect(row).toEqual(
+        expect.objectContaining({
+          status: VideoStatus.PROCESSING,
+          upload_id: null,
+          failure_reason: null,
+        }),
+      );
+      expect(row.processing_started_at).toBeInstanceOf(Date);
+      // DB clock vs. test clock: allow a little skew.
+      expect(row.processing_started_at!.getTime()).toBeGreaterThanOrEqual(
+        before.getTime() - 5000,
+      );
+    });
+
+    it('updates only the targeted draft', async () => {
+      const target = await insertVideo(VideoStatus.DRAFT, 'upload-1');
+      const other = await insertVideo(VideoStatus.DRAFT, 'upload-2');
+
+      await lifecycle.markProcessing(target);
+
+      await expect(
+        videoRepository.findOneByOrFail({ id: other }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.DRAFT,
+          upload_id: 'upload-2',
+          processing_started_at: null,
+        }),
+      );
+    });
+
+    it.each([VideoStatus.PROCESSING, VideoStatus.READY, VideoStatus.FAILED])(
+      'returns false and leaves a %s video unchanged',
+      async (status) => {
+        const id = await insertVideo(status, null);
+
+        await expect(lifecycle.markProcessing(id)).resolves.toBe(false);
+
+        await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+          expect.objectContaining({ status, processing_started_at: null }),
+        );
+      },
+    );
+
+    it('returns false for an unknown id', async () => {
+      await expect(lifecycle.markProcessing(randomUUID())).resolves.toBe(false);
+    });
+  });
 });

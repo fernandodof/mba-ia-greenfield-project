@@ -726,6 +726,103 @@
         ]
       }
     },
+    "/videos/{id}/upload/complete": {
+      "post": {
+        "description": "Completes the multipart upload of the caller's draft video, checks the stored size, moves the video to processing and enqueues its processing job. Idempotent: repeating the call on a processing video returns the same response.",
+        "operationId": "VideosController_completeUpload",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload completed and processing started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoProcessingStartedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed (VALIDATION_ERROR), or the parts are not exactly the video parts in ascending order or were rejected by storage (UPLOAD_PARTS_INVALID; the video stays a draft)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Video not found or not owned by the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The video is ready or failed, or its storage upload is gone with nothing stored (VIDEO_UPLOAD_NOT_ACTIVE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The stored size differs from the declared size; the object is deleted and the video fails (UPLOAD_SIZE_MISMATCH)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "summary": "Complete a video upload",
+        "tags": [
+          "videos"
+        ]
+      }
+    },
     "/videos/{id}/upload": {
       "delete": {
         "description": "Aborts the multipart upload of the caller's draft video, deletes any stored original and keeps the video as failed with reason UPLOAD_ABORTED.",
@@ -1051,6 +1148,36 @@
         },
         "required": [
           "parts"
+        ]
+      },
+      "CompleteUploadDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "VideoProcessingStartedDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "example": "dQw4w9WgXcQ",
+            "description": "11-char base64url"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "processing"
+            ],
+            "example": "processing"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "status"
         ]
       },
       "ApiErrorEnvelope": {
