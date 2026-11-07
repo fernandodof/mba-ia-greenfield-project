@@ -3,16 +3,27 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
+import { UploadSessionNotFoundError } from '../storage/storage.errors';
 import { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
+import type { SignedUploadPartsDto } from './dto/signed-upload-parts.dto';
+import type { UploadedPartsDto } from './dto/uploaded-parts.dto';
 import type { VideoUploadSessionDto } from './dto/video-upload-session.dto';
 import { Video } from './entities/video.entity';
-import { computePartCount, VIDEO_PART_SIZE_BYTES } from './video.constants';
+import {
+  computePartCount,
+  UPLOAD_PART_URL_TTL_SECONDS,
+  VIDEO_PART_SIZE_BYTES,
+} from './video.constants';
 import { generateVideoSlug } from './video-slug.util';
 import { originalKey } from './video-storage-keys';
 import { deriveVideoTitle } from './video-title.util';
 import { VideoStatus } from './video.types';
-import { VideoNotFoundException } from './videos.exceptions';
+import {
+  UploadPartsInvalidException,
+  VideoNotFoundException,
+  VideoUploadNotActiveException,
+} from './videos.exceptions';
 
 type NewDraft = Pick<
   Video,
@@ -109,6 +120,72 @@ export class VideosService {
       throw new VideoNotFoundException();
     }
     return video;
+  }
+
+  /**
+   * Presigns `UploadPart` URLs (public client, 1 h TTL) for the owner's draft,
+   * so the bytes go straight to storage (TD-02). Every part number is checked
+   * against `partCount` before anything is signed.
+   */
+  async signUploadParts(
+    userId: string,
+    id: string,
+    partNumbers: number[],
+  ): Promise<SignedUploadPartsDto> {
+    const video = await this.findOwnedById(userId, id);
+    const uploadId = this.activeUploadId(video);
+
+    const partCount = computePartCount(video.size_bytes);
+    if (partNumbers.some((partNumber) => partNumber > partCount)) {
+      throw new UploadPartsInvalidException();
+    }
+
+    const expiresAt = new Date(Date.now() + UPLOAD_PART_URL_TTL_SECONDS * 1000);
+    const key = originalKey(id);
+    const parts = await Promise.all(
+      partNumbers.map(async (partNumber) => ({
+        partNumber,
+        url: await this.storage.presignUploadPart(
+          key,
+          uploadId,
+          partNumber,
+          UPLOAD_PART_URL_TTL_SECONDS,
+        ),
+      })),
+    );
+    return { parts, expiresAt: expiresAt.toISOString() };
+  }
+
+  /**
+   * Lists the parts already stored for the owner's draft, so an interrupted
+   * upload can resume. A storage session that no longer exists means the
+   * upload is not active (TD-03 AMB-7 revision); the row is left unchanged.
+   */
+  async listUploadedParts(
+    userId: string,
+    id: string,
+  ): Promise<UploadedPartsDto> {
+    const video = await this.findOwnedById(userId, id);
+    const uploadId = this.activeUploadId(video);
+
+    try {
+      const parts = await this.storage.listParts(originalKey(id), uploadId);
+      return { parts };
+    } catch (err) {
+      if (err instanceof UploadSessionNotFoundError) {
+        throw new VideoUploadNotActiveException();
+      }
+      throw err;
+    }
+  }
+
+  // Only a `draft` has an upload session; any other status (or a draft whose
+  // session was already cleared) answers VIDEO_UPLOAD_NOT_ACTIVE.
+  private activeUploadId(video: Video): string {
+    if (video.status !== VideoStatus.DRAFT || !video.upload_id) {
+      throw new VideoUploadNotActiveException();
+    }
+    return video.upload_id;
   }
 
   // Standalone inserts (no transaction), so a failed attempt never aborts the

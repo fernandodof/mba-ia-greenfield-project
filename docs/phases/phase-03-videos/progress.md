@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 6/16 completed
+**SIs:** 7/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -85,9 +85,16 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.7 — Part Signing and Upload Resume (POST/GET /videos/:id/upload/parts)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 24 passing: `src/videos/videos.service.spec.ts` +10 (unit, now 21), `src/videos/videos.service.integration-spec.ts` +2 (real DB + `minio`, now 7), and `test/videos-upload-parts.e2e-spec.ts` 12, which covers all 12 scenarios of `nestjs-project/specs/videos-upload-parts.plan.md` (real signed-URL `PUT`s in 1.3 and 2.2). Full suites: 34 suites / 248 tests; e2e 5 suites / 74 tests.
+- **Observations:**
+  - Both service methods share a private `activeUploadId(video)` guard. Anything other than a `draft`, or a `draft` with a `NULL` `upload_id` (it shouldn't happen, since drafts are inserted with one), throws `VideoUploadNotActiveException` before any storage call. The plan only names the `draft` check; the null-`upload_id` case was folded into it rather than letting a `null` reach the S3 SDK.
+  - `signUploadParts` checks every part number against `computePartCount(size_bytes)` before signing, so a mixed `[1, 2]` on a 1-part video signs nothing (spec 1.4). Parts are presigned in parallel (`Promise.all`; signing is offline). `expiresAt` is computed once, right before signing: `Date.now() + UPLOAD_PART_URL_TTL_SECONDS * 1000`, as an ISO string.
+  - `listUploadedParts` maps only `UploadSessionNotFoundError` to `VideoUploadNotActiveException`; any other storage error is rethrown unchanged. The row is never modified.
+  - `SignUploadPartsDto` uses exactly the Validation Rules decorators and no `@ApiProperty` (request-DTO rule). Its `openapi.json` schema is therefore empty, like every other request DTO (pre-existing follow-up). The response DTOs (`SignedUploadPartsDto`/`SignedUploadPartDto`, `UploadedPartsDto`/`UploadedPartDto`) carry `@ApiProperty`; the nested part classes live in the same files as their parents. `openapi.json` change is additive only (+242 lines).
+  - The service returns the response DTO shapes directly. `UploadedPart` from `StorageService` already has the contract's field names, so no mapping layer was added.
+  - context7 (`/typestack/class-validator`, develop docs vs installed 0.14.4; `/nestjs/docs.nestjs.com/__branch__11.0.0`): the array decorators, `each: true`, `@ApiProperty({ type: [Dto] })` and `@HttpCode` signatures match the installed versions. No mismatch.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.8 — Abort Upload (DELETE /videos/:id/upload)
 - **Status:** pending

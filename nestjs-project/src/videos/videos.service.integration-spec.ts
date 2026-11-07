@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -148,6 +148,43 @@ describe('VideosService (integration)', () => {
       await expect(
         service.findOwnedById(user.id, randomUUID()),
       ).rejects.toMatchObject({ errorCode: 'VIDEO_NOT_FOUND' });
+    });
+  });
+
+  describe('signUploadParts / listUploadedParts', () => {
+    it('signs a part URL that accepts a plain PUT, then lists that part for resume', async () => {
+      const user = await createUserWithChannel();
+      const { session } = await startUpload(user.id);
+      const bytes = randomBytes(1024);
+
+      const signed = await service.signUploadParts(user.id, session.id, [1]);
+      const put = await fetch(signed.parts[0].url, {
+        method: 'PUT',
+        body: new Uint8Array(bytes),
+      });
+
+      expect(put.status).toBe(200);
+      const etag = put.headers.get('etag');
+      expect(etag).toBeTruthy();
+      await expect(
+        service.listUploadedParts(user.id, session.id),
+      ).resolves.toEqual({ parts: [{ partNumber: 1, etag, size: 1024 }] });
+    });
+
+    it('throws VIDEO_UPLOAD_NOT_ACTIVE after the upload was aborted directly in storage, leaving the row a draft', async () => {
+      const user = await createUserWithChannel();
+      const { session, row } = await startUpload(user.id);
+      await storage.abortMultipartUpload(originalKey(row.id), row.upload_id!);
+
+      await expect(
+        service.listUploadedParts(user.id, session.id),
+      ).rejects.toMatchObject({
+        errorCode: 'VIDEO_UPLOAD_NOT_ACTIVE',
+        httpStatus: 409,
+      });
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toMatchObject({ status: VideoStatus.DRAFT });
     });
   });
 });
