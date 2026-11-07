@@ -3,7 +3,7 @@ libs:
   "@nestjs/bullmq":
     version: "^12.0.0"
     context7_id: "/nestjs/bull"
-    fetched_at: "2026-11-04T15:20:00-03:00"
+    fetched_at: "2026-11-07T05:35:00-03:00"
   bullmq:
     version: "^6.6.1"
     context7_id: "/taskforcesh/bullmq/v6.5.3"
@@ -19,7 +19,7 @@ libs:
   "@aws-sdk/client-s3":
     version: "^3.1161.0"
     context7_id: "/aws/aws-sdk-js-v3"
-    fetched_at: "2026-11-04T15:20:00-03:00"
+    fetched_at: "2026-11-07T05:35:00-03:00"
   "@aws-sdk/s3-request-presigner":
     version: "^3.1161.0"
     context7_id: "/aws/aws-sdk-js-v3"
@@ -33,12 +33,12 @@ libs:
     context7_id: "/websites/ffmpeg_ffmpeg-all"
     fetched_at: "2026-11-04T15:20:00-03:00"
 sources_mtime:
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-04T15:21:47-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-07T05:33:08-03:00"
 ---
 
 # phase-03-videos — Library References
 
-Distilled docs for the libraries, images and binaries pinned for this slice, from the `**Libraries:**` lines of `docs/decisions/technical-decisions-phase-03-videos.md`. Pulled via Context7 on 2026-11-04 and cross-checked against the npm registry, Docker Hub and the bookworm apt index. Re-fetch when the underlying TD changes.
+Distilled docs for the libraries, images and binaries pinned for this slice, from the `**Libraries:**` lines of `docs/decisions/technical-decisions-phase-03-videos.md`. Pulled via Context7 on 2026-11-04 and cross-checked against the npm registry, Docker Hub and the bookworm apt index. Re-fetch when the underlying TD changes. Updated on 2026-11-07 (plan-resolve pass 2: AMB-6/7/8/10), with Context7 re-checks of `/nestjs/bull` (`registerQueue` with several queues) and `/aws/aws-sdk-js-v3` (error names). No new libraries.
 
 ## Version pinning summary
 
@@ -88,6 +88,26 @@ export class VideoProcessor extends WorkerHost {
 - Only register the `@Processor` provider in the **worker** app context. The API module imports `registerQueue` without the processor, so the API process never consumes jobs.
 - `registerQueue` attaches `onApplicationShutdown` and closes workers and queue, so tests must `app.close()` / `module.close()` to release Redis handles (Jest open-handle hygiene, see Phase 0.5).
 
+### Maintenance queue (TD-04 / TD-13 revisions, AMB-6)
+
+`registerQueue` is variadic, and each queue has its own `defaultJobOptions`. The worker app context registers both queues; the sweeper never shares `video-processing`'s options or its `failed` handler:
+
+```ts
+BullModule.registerQueue(
+  { name: 'video-processing', defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: true, removeOnFail: { count: 1000 } } },
+  { name: 'video-maintenance', defaultJobOptions: { attempts: 1, removeOnComplete: true, removeOnFail: { count: 100 } } },
+);
+
+@Processor('video-maintenance', { concurrency: 1 })
+export class VideoMaintenanceProcessor extends WorkerHost {
+  constructor(@InjectQueue('video-processing') private readonly processing: Queue) { super(); }
+  async process(): Promise<void> { /* TD-13 processing reconciliation + TD-04 draft expiry */ }
+}
+```
+
+- The `VideoProcessor` `@OnWorkerEvent('failed')` handler returns early when `job` is `undefined` or `job.data.videoId` is missing (TD-12 revision). TypeORM drops `undefined` in `where`.
+- The API process registers only `video-processing` (producer) and no processors.
+
 ## bullmq
 
 **Source:** `/taskforcesh/bullmq/v6.5.3` (Context7, High reputation, 4.5k snippets). Maps to `TD-01`, `TD-04`, `TD-12`, `TD-13`.
@@ -118,9 +138,10 @@ defaultJobOptions: {
 ### Job Schedulers (TD-04 / TD-13 sweeper)
 
 ```ts
+// queue = the 'video-maintenance' queue (AMB-6), never 'video-processing'
 await queue.upsertJobScheduler(
   'video-sweeper',
-  { every: sweeperIntervalMs },             // default 15 min (TD-13 revision)
+  { every: sweeperIntervalMs },             // VIDEO_SWEEPER_INTERVAL_MS, default 15 min
   { name: 'sweep', data: {}, opts: {} },
 );
 ```
@@ -171,6 +192,10 @@ const presign  = new S3Client({ ...common, endpoint: cfg.publicEndpoint });  // 
 | Complete | `CompleteMultipartUploadCommand({ …, MultipartUpload: { Parts: [{ PartNumber, ETag }] } })` | Parts ascending. `InvalidPart`/`InvalidPartOrder` → 400. |
 | Verify size | `HeadObjectCommand` → `ContentLength` | Compare with declared `size_bytes`. |
 | Abort (user / sweeper) | `AbortMultipartUploadCommand` | Tolerate `NoSuchUpload`. |
+| Drop original (user abort / sweeper expiry) | `DeleteObjectCommand({ Key: 'videos/{id}/original' })` | Idempotent: succeeds when the object is absent (TD-03 AMB-7, TD-04 AMB-6). |
+| Source check (worker, AMB-10) | `HeadObjectCommand` before ffprobe | `NotFound` → `SOURCE_MISSING`; anything else is transient. |
+
+**Error matching.** Match S3 errors by `err.name` (the SDK's `ServiceException` also supports `instanceof`, and `$metadata.httpStatusCode` is available). `NoSuchUpload` covers `CompleteMultipartUpload` / `ListParts` / `AbortMultipartUpload` on a finished or expired upload; on a draft row `complete` treats it as "possibly already completed" and checks with `HeadObject` (TD-03 AMB-7). `HeadObject` on a missing key answers 404 with no body, which the SDK surfaces as `name === 'NotFound'` (the SDK's own `waitUntilObjectNotExists` waiter checks exactly this). Confirmed via Context7 `/aws/aws-sdk-js-v3` on 2026-11-07.
 | Thumbnail | `PutObjectCommand({ Key: 'videos/{id}/thumbnail.jpg', Body, ContentType: 'image/jpeg' })` | Internal client. |
 | Bucket bootstrap | `HeadBucketCommand` / `CreateBucketCommand` | Idempotent (or a `pgsty/mc` init service). |
 
@@ -179,16 +204,18 @@ const presign  = new S3Client({ ...common, endpoint: cfg.publicEndpoint });  // 
 ```ts
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 const url = await getSignedUrl(presign, new UploadPartCommand({ Bucket, Key, UploadId, PartNumber }), { expiresIn: 3600 });
-const stream = await getSignedUrl(presign, new GetObjectCommand({ Bucket, Key }), { expiresIn: 300 });
+const stream = await getSignedUrl(presign, new GetObjectCommand({ Bucket, Key }), { expiresIn: 3600 });
 const download = await getSignedUrl(presign, new GetObjectCommand({
-  Bucket, Key, ResponseContentDisposition: `attachment; filename="${safeName}"`,
-}), { expiresIn: 300 });
+  Bucket, Key,
+  ResponseContentDisposition: `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+}), { expiresIn: 3600 });
 ```
 
-- `expiresIn` defaults to **900 s** if omitted. Always pass it explicitly (TD-02: parts 1 h; TD-11: short-lived GET).
+- `expiresIn` defaults to **900 s** if omitted. Always pass it explicitly: TD-02 part URLs 3600 s; TD-11 stream/download GET 3600 s (1 h, user decision 2026-11-07, AMB-8); the worker's internal ffprobe/ffmpeg GET 900 s, re-signed each attempt (TD-09 AMB-10).
+- Routes (TD-11 revision): `GET /videos/:slug/stream` and `GET /videos/:slug/download`, both `@Public()`, answer `302` + `Cache-Control: no-store`. An unknown slug and a non-`ready` video both answer `404 VIDEO_NOT_FOUND`. The stream URL has no response overrides (the object's `Content-Type` was set at `CreateMultipartUpload`).
 - Signing is offline: no connection to the public endpoint is needed, which is why the `localhost:9000` presign client works from inside the container.
 - The SigV4 signature binds the host. URLs consumed **inside** containers (worker ffprobe/ffmpeg input, e2e tests) must be signed with the internal endpoint. In the test env, `S3_PUBLIC_ENDPOINT = S3_ENDPOINT = http://minio:9000` (TD-06 revision).
-- `ResponseContentDisposition` is a signed query parameter. Sanitize/encode the filename (RFC 6266 `filename*=UTF-8''…` for non-ASCII).
+- `ResponseContentDisposition` is a signed query parameter. The download name is the sanitized `title` plus the original extension (last `.ext` of `original_filename`, lower-cased, kept only if `^[a-z0-9]{1,10}$`). Sanitizing removes control characters and `/ \ : * ? " < > |`, collapses whitespace, and trims spaces and trailing dots; an empty result becomes `video`. `encodedName` = `encodeURIComponent(name)` with `'()*` also percent-encoded (RFC 5987); `asciiName` replaces non-ASCII characters with `_` (RFC 6266 fallback).
 
 ## pgsty/silo + pgsty/mc (Docker images)
 
@@ -219,5 +246,7 @@ ffmpeg -v error -ss <t> -i "<internal presigned GET>" -frames:v 1 \
 - `-ss` **before** `-i` means input seeking: FFmpeg seeks with HTTP Range requests and doesn't decode from the start.
 - `-frames:v 1` writes a single image. `-q:v` 2–5 is good JPEG quality for mjpeg.
 - `scale` with `force_original_aspect_ratio=decrease` fits the box, and `force_divisible_by=2` keeps even dimensions. Both options are present in 5.1.9 (`ffmpeg -h filter=scale`, checked 2026-11-04). Using `min(...,iw/ih)` prevents upscaling.
-- Call via `child_process.execFile` (no shell), with a `timeout` (120 s) and a `maxBuffer` large enough for the JPEG (10 MiB). A non-zero exit or empty stdout counts as a failed extraction (TD-09 revision fallback).
+- Call via `child_process.execFile` (no shell), with a `timeout` (120 s) and a `maxBuffer` large enough for the JPEG (10 MiB). A timeout is transient. A non-zero exit is classified by stderr (TD-09 revision, AMB-10): a case-insensitive match of the transient list → a normal `Error` (retried per TD-12); otherwise `INVALID_MEDIA` (ffprobe) or the t = 0 fallback, then `THUMBNAIL_FAILED` (ffmpeg). Empty stdout on exit 0 → fallback.
+- Transient stderr patterns (FFmpeg `http`/`tcp` protocol messages, kept as one exported constant): `Connection refused`, `Connection reset`, `timed out`, `Server returned 5` (5XX), `Server returned 403` (expired/invalid signature), `Input/output error`, `I/O error`, `Failed to resolve hostname`. `-v error` keeps these on stderr.
+- Before ffprobe, `HeadObject` the original with the internal client: `NotFound` → `UnrecoverableError` `SOURCE_MISSING`, any other error → transient.
 - ffprobe JSON fields used: `format.duration` (string, seconds), `streams[i].codec_type === 'video'`, `.width`, `.height`, `.codec_name`.
