@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
-**SIs:** 15/16 completed
+**Status:** completed
+**SIs:** 16/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -200,6 +200,12 @@
   - Manual check: after `docker compose restart video-worker`, the logs show `video-sweeper scheduled every 900000 ms` with no errors. On the `bull` prefix, `getJobScheduler('video-sweeper')` gives `every: 900000` with `iterationCount: 2` (the immediate sweep ran and completed), 1 scheduler, 1 delayed `sweep` job, 0 failed. The dev DB had 0 `videos` rows, so the sweep changed nothing.
 
 ### SI-03.16 — End-to-End Video Pipeline Verification
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 3 new passing. `test/videos-pipeline.e2e-spec.ts` (3, API `AppModule` with the e2e global pipe/filters + in-process `VideoWorkerModule` with `init()`, real Postgres + Redis `bull-test` + minio + ffmpeg): valid 2 s 320×240 MP4 → `draft` (GET) → `processing` (GET, with the in-process worker paused) → `ready` with `durationMs` ≈ 2000, `width` 320, `height` 240, `videoCodec` `h264`, thumbnail present; stream 302 (`Cache-Control: no-store`) → `Range` 206 with the right bytes and `Content-Range`; download 302 → 200, identical bytes, `Content-Disposition: attachment; filename="pipeline.mp4"; …`; random bytes declared `video/mp4` → `failed`/`INVALID_MEDIA` (metadata null), stream and download 404 `VIDEO_NOT_FOUND` with no `Location`; two uploads → two distinct 11-char slugs, both `ready`, each stream redirect pointing at its own original. Polling `GET /videos/:id` every 250 ms with a 60 s deadline; the suite runs in ~3 s. Full suites: 48 suites / 462 tests; e2e 9 suites / 102 tests. Final verification: tsc 0, lint 0, build 0.
+- **Observations:**
+  - **Deviation:** technical action 1 (`test/helpers/authenticated-user.ts`) was already done in SI-03.6 by user decision (the Step 8 rule) and is reused here unchanged.
+  - The worker runs as a `TestingModule` built from `VideoWorkerModule` and started with `init()`. `TestingModule` extends `NestApplicationContext`, so this is the application context the plan asks for and follows the SI-03.14 pattern. The `bull-test` `video-processing` queue is obliterated before the worker starts and in every `beforeEach`. Because `init()` also registers the `video-sweeper` scheduler and runs one immediate sweep (SI-03.15), `afterAll` removes the scheduler and obliterates `bull-test:video-maintenance`; the sweep finds only fresh rows. `afterAll` closes the worker first, then the app. Jest exits on its own, and no `bull-test:*` key, minio object or `videos` row remains.
+  - To observe `processing` through `GET /videos/:id` deterministically (AC 1), the valid-video test calls `processor.worker.pause()` before `complete` and `resume()` after the GET. Without it, the 2 s fixture can reach `ready` before the first poll.
+  - "Two uploads → distinct slugs" uploads the same MP4 twice through the whole flow (both reach `ready`) instead of only calling `POST /videos` twice.
+  - Manual Compose check (AC 6), from the Mac host: started the API with `docker compose exec -d nestjs-api sh -c 'npm run start:dev > /tmp/api-dev.log 2>&1'` (`curl localhost:3000/` → 200). Then, with curl against `localhost:3000`: register (201), confirmed the user with SQL in `db`, login, `POST /videos` for a 3 s 640×360 MP4 (22816 B), sign part 1. The presigned URL host was `http://localhost:9000`, and the PUT to it returned 200 + ETag. `complete` returned 200 `processing`. About 1 s later `GET /videos/:id` showed `ready` with `durationMs` 3000, 640×360, `h264`. Redis `bull:video-processing:events` (the dev prefix) shows added → waiting → active → completed for that job id, and all the worker connections came from the `video-worker` container IP (the API container holds only the producer connection). From the host, stream gave 302 → `Range` 206 `bytes 0-1023/22816` `video/mp4`, and download gave 302 → 200 `Content-Disposition: attachment; filename="manual-check.mp4"; …` with bytes identical to the upload. Afterwards the dev server processes were killed (the container is back to `tail -f /dev/null`), and the test user (with its channel and tokens), the video row and both minio objects were deleted.
+  - context7: `/nestjs/docs.nestjs.com` (`createApplicationContext` + `app.close()` runs the shutdown hooks; e2e `createNestApplication` + `app.close()`); `/forwardemail/supertest` (master docs = 7.3.1, installed 7.2.2): `Test` calls `redirects(0)`, so redirects are not followed. The installed `lib/test.js:43` has the same call, so the version gap does not matter here. `/taskforcesh/bullmq/v6.5.3` (installed 6.7.1): `obliterate({ force: true })` and `removeJobScheduler(id)` → boolean. No mismatches affect this spec.
