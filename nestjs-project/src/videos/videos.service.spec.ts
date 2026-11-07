@@ -12,6 +12,7 @@ import type { MockedMethods } from '../test/mocked-methods';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import { Video } from './entities/video.entity';
 import {
+  PLAYBACK_URL_TTL_SECONDS,
   UPLOAD_PART_URL_TTL_SECONDS,
   VIDEO_PART_SIZE_BYTES,
 } from './video.constants';
@@ -44,6 +45,7 @@ type StorageServiceMock = Pick<
   | 'deleteObject'
   | 'completeMultipartUpload'
   | 'headObject'
+  | 'presignGetObject'
 >;
 type LifecycleServiceMock = Pick<
   MockedMethods<VideoLifecycleService>,
@@ -118,6 +120,7 @@ describe('VideosService', () => {
       completeMultipartUpload:
         jest.fn() as StorageServiceMock['completeMultipartUpload'],
       headObject: jest.fn() as StorageServiceMock['headObject'],
+      presignGetObject: jest.fn() as StorageServiceMock['presignGetObject'],
     };
     storage.createMultipartUpload.mockResolvedValue(UPLOAD_ID);
     storage.abortMultipartUpload.mockResolvedValue(undefined);
@@ -695,5 +698,80 @@ describe('VideosService', () => {
       ).rejects.toBeInstanceOf(VideoUploadNotActiveException);
       expect(processingQueue.enqueue).not.toHaveBeenCalled();
     });
+  });
+
+  describe('getPlaybackUrl', () => {
+    const SLUG = 'AbCdEfGhIjK';
+    const PRESIGNED_URL =
+      'http://storage.test/videos/x/original?X-Amz-Expires=3600';
+
+    function makeReadyVideo(): Video {
+      return makeVideo({
+        slug: SLUG,
+        status: VideoStatus.READY,
+        upload_id: null,
+        title: 'Férias: dia 1/2',
+        original_filename: 'clip.MP4',
+      });
+    }
+
+    it('should look up only a ready video by slug', async () => {
+      videoRepository.findOne.mockResolvedValue(makeReadyVideo());
+      storage.presignGetObject.mockResolvedValue(PRESIGNED_URL);
+
+      await service.getPlaybackUrl(SLUG, 'stream');
+
+      expect(videoRepository.findOne).toHaveBeenCalledWith({
+        where: { slug: SLUG, status: VideoStatus.READY },
+      });
+    });
+
+    it('should presign a public 1 h GET of the original without a disposition for stream', async () => {
+      videoRepository.findOne.mockResolvedValue(makeReadyVideo());
+      storage.presignGetObject.mockResolvedValue(PRESIGNED_URL);
+
+      const url = await service.getPlaybackUrl(SLUG, 'stream');
+
+      expect(url).toBe(PRESIGNED_URL);
+      expect(storage.presignGetObject).toHaveBeenCalledWith(VIDEO_KEY, {
+        client: 'public',
+        expiresIn: PLAYBACK_URL_TTL_SECONDS,
+        responseContentDisposition: undefined,
+      });
+    });
+
+    it('should pass the attachment disposition built from title and original filename for download', async () => {
+      videoRepository.findOne.mockResolvedValue(makeReadyVideo());
+      storage.presignGetObject.mockResolvedValue(PRESIGNED_URL);
+
+      const url = await service.getPlaybackUrl(SLUG, 'download');
+
+      expect(url).toBe(PRESIGNED_URL);
+      expect(storage.presignGetObject).toHaveBeenCalledWith(VIDEO_KEY, {
+        client: 'public',
+        expiresIn: PLAYBACK_URL_TTL_SECONDS,
+        responseContentDisposition:
+          'attachment; filename="F_rias dia 12.mp4"; filename*=UTF-8\'\'F%C3%A9rias%20dia%2012.mp4',
+      });
+    });
+
+    // `draft`/`processing`/`failed` rows never match the `status: ready`
+    // filter, so the repository answers null just as for an unknown slug.
+    it.each([
+      ['an unknown slug', 'stream'],
+      ['a draft video', 'stream'],
+      ['a processing video', 'download'],
+      ['a failed video', 'download'],
+    ] as const)(
+      'should throw VideoNotFoundException for %s (%s) without presigning',
+      async (_case, mode) => {
+        videoRepository.findOne.mockResolvedValue(null);
+
+        await expect(service.getPlaybackUrl(SLUG, mode)).rejects.toBeInstanceOf(
+          VideoNotFoundException,
+        );
+        expect(storage.presignGetObject).not.toHaveBeenCalled();
+      },
+    );
   });
 });

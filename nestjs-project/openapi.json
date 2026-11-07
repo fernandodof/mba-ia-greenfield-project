@@ -564,6 +564,106 @@
         ]
       }
     },
+    "/videos/{slug}/stream": {
+      "get": {
+        "description": "Public. Redirects to a short-lived (1 h) presigned URL of the original file; object storage answers Range requests with 206 Partial Content. Only ready videos are served.",
+        "operationId": "VideosController_stream",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the presigned stream URL",
+            "headers": {
+              "Location": {
+                "description": "Presigned GET URL of the original file (1 h TTL)",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown slug, or the video is not ready (VIDEO_NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stream a ready video",
+        "tags": [
+          "videos"
+        ]
+      }
+    },
+    "/videos/{slug}/download": {
+      "get": {
+        "description": "Public. Redirects to a short-lived (1 h) presigned URL of the original file that storage serves as an attachment named after the video title plus the original extension. Only ready videos are served.",
+        "operationId": "VideosController_download",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the presigned download URL",
+            "headers": {
+              "Location": {
+                "description": "Presigned GET URL of the original file (1 h TTL) with an attachment Content-Disposition override",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown slug, or the video is not ready (VIDEO_NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Download a ready video",
+        "tags": [
+          "videos"
+        ]
+      }
+    },
     "/videos/{id}/upload/parts": {
       "post": {
         "description": "Returns short-lived (1 h) presigned URLs for the given part numbers of the caller's draft video. The client PUTs each part's bytes straight to object storage.",

@@ -14,9 +14,11 @@ import type { SignedUploadPartsDto } from './dto/signed-upload-parts.dto';
 import type { UploadedPartsDto } from './dto/uploaded-parts.dto';
 import type { VideoProcessingStartedDto } from './dto/video-processing-started.dto';
 import type { VideoUploadSessionDto } from './dto/video-upload-session.dto';
+import { buildDownloadContentDisposition } from './download-filename.util';
 import { Video } from './entities/video.entity';
 import {
   computePartCount,
+  PLAYBACK_URL_TTL_SECONDS,
   UPLOAD_PART_URL_TTL_SECONDS,
   VIDEO_PART_SIZE_BYTES,
 } from './video.constants';
@@ -32,6 +34,8 @@ import {
   VideoNotFoundException,
   VideoUploadNotActiveException,
 } from './videos.exceptions';
+
+export type PlaybackMode = 'stream' | 'download';
 
 type NewDraft = Pick<
   Video,
@@ -141,6 +145,34 @@ export class VideosService {
       throw new VideoNotFoundException();
     }
     return video;
+  }
+
+  /**
+   * Public playback by slug (TD-11, TD-14): a presigned public `GetObject`
+   * URL (1 h) for the original, so storage serves `Range`/`206` itself. Only
+   * `ready` videos resolve; an unknown slug and a `draft`/`processing`/
+   * `failed` video both answer VIDEO_NOT_FOUND, so the state is not revealed.
+   * `download` adds an attachment `Content-Disposition`; `stream` has no
+   * response overrides.
+   */
+  async getPlaybackUrl(slug: string, mode: PlaybackMode): Promise<string> {
+    const video = await this.videoRepository.findOne({
+      where: { slug, status: VideoStatus.READY },
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    return this.storage.presignGetObject(originalKey(video.id), {
+      client: 'public',
+      expiresIn: PLAYBACK_URL_TTL_SECONDS,
+      responseContentDisposition:
+        mode === 'download'
+          ? buildDownloadContentDisposition(
+              video.title,
+              video.original_filename,
+            )
+          : undefined,
+    });
   }
 
   /**

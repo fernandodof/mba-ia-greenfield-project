@@ -24,6 +24,7 @@ import {
   type VideoProcessingJobData,
 } from './video-queue.constants';
 import { originalKey } from './video-storage-keys';
+import { generateVideoSlug } from './video-slug.util';
 import { VideoStatus } from './video.types';
 import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
@@ -382,6 +383,97 @@ describe('VideosService (integration)', () => {
         upload_id: null,
       });
       await expect(queue.getJob(session.id)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('getPlaybackUrl', () => {
+    const OBJECT_SIZE = 2048;
+
+    // Seeds the row directly (no upload/worker flow needed) and, for `ready`
+    // rows, puts the original object straight into storage.
+    async function seedVideo(
+      status: VideoStatus,
+      overrides: Partial<Video> = {},
+    ): Promise<{ video: Video; bytes: Buffer }> {
+      const user = await createUserWithChannel();
+      const channel = await channelRepository.findOneByOrFail({
+        user_id: user.id,
+      });
+      const bytes = randomBytes(OBJECT_SIZE);
+      const video = await videoRepository.save(
+        videoRepository.create({
+          id: randomUUID(),
+          slug: generateVideoSlug(),
+          channel_id: channel.id,
+          title: 'My clip',
+          original_filename: 'clip.mp4',
+          content_type: 'video/mp4',
+          size_bytes: OBJECT_SIZE,
+          status,
+          ...overrides,
+        }),
+      );
+      if (status === VideoStatus.READY) {
+        await storage.putObject(
+          originalKey(video.id),
+          bytes,
+          video.content_type,
+        );
+      }
+      return { video, bytes };
+    }
+
+    it('returns a stream URL that storage answers with 206 for a Range request', async () => {
+      const { video, bytes } = await seedVideo(VideoStatus.READY, {
+        content_type: 'video/webm',
+      });
+
+      const url = await service.getPlaybackUrl(video.slug, 'stream');
+      const response = await fetch(url, {
+        headers: { Range: 'bytes=0-1023' },
+      });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('content-type')).toBe('video/webm');
+      expect(response.headers.get('content-disposition')).toBeNull();
+      const body = Buffer.from(await response.arrayBuffer());
+      expect(body.equals(bytes.subarray(0, 1024))).toBe(true);
+    });
+
+    it('returns a download URL that storage answers with the attachment disposition', async () => {
+      const { video } = await seedVideo(VideoStatus.READY, {
+        title: 'Férias: dia 1/2',
+        original_filename: 'clip.MP4',
+      });
+
+      const url = await service.getPlaybackUrl(video.slug, 'download');
+      const response = await fetch(url);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-disposition')).toBe(
+        'attachment; filename="F_rias dia 12.mp4"; filename*=UTF-8\'\'F%C3%A9rias%20dia%2012.mp4',
+      );
+      await response.arrayBuffer();
+    });
+
+    it.each([VideoStatus.DRAFT, VideoStatus.PROCESSING, VideoStatus.FAILED])(
+      'throws VIDEO_NOT_FOUND for a %s video',
+      async (status) => {
+        const { video } = await seedVideo(status);
+
+        await expect(
+          service.getPlaybackUrl(video.slug, 'stream'),
+        ).rejects.toMatchObject({
+          errorCode: 'VIDEO_NOT_FOUND',
+          httpStatus: 404,
+        });
+      },
+    );
+
+    it('throws VIDEO_NOT_FOUND for an unknown slug', async () => {
+      await expect(
+        service.getPlaybackUrl(generateVideoSlug(), 'download'),
+      ).rejects.toMatchObject({ errorCode: 'VIDEO_NOT_FOUND' });
     });
   });
 });

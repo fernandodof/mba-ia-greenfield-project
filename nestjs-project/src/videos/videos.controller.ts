@@ -3,11 +3,14 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Redirect,
+  type HttpRedirectResponse,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -19,6 +22,7 @@ import {
 import { SkipThrottle } from '@nestjs/throttler';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
@@ -96,6 +100,67 @@ export class VideosController {
   ): Promise<VideoDto> {
     const video = await this.videosService.findOwnedById(user.sub, id);
     return VideoDto.fromEntity(video);
+  }
+
+  @Get(':slug/stream')
+  @Public()
+  @Redirect()
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Stream a ready video',
+    description:
+      'Public. Redirects to a short-lived (1 h) presigned URL of the original file; object storage answers Range requests with 206 Partial Content. Only ready videos are served.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to the presigned stream URL',
+    headers: {
+      Location: {
+        description: 'Presigned GET URL of the original file (1 h TTL)',
+        schema: { type: 'string', format: 'uri' },
+      },
+      'Cache-Control': { schema: { type: 'string', example: 'no-store' } },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Unknown slug, or the video is not ready (VIDEO_NOT_FOUND)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(@Param('slug') slug: string): Promise<HttpRedirectResponse> {
+    const url = await this.videosService.getPlaybackUrl(slug, 'stream');
+    return { url, statusCode: HttpStatus.FOUND };
+  }
+
+  @Get(':slug/download')
+  @Public()
+  @Redirect()
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Download a ready video',
+    description:
+      'Public. Redirects to a short-lived (1 h) presigned URL of the original file that storage serves as an attachment named after the video title plus the original extension. Only ready videos are served.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to the presigned download URL',
+    headers: {
+      Location: {
+        description:
+          'Presigned GET URL of the original file (1 h TTL) with an attachment Content-Disposition override',
+        schema: { type: 'string', format: 'uri' },
+      },
+      'Cache-Control': { schema: { type: 'string', example: 'no-store' } },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Unknown slug, or the video is not ready (VIDEO_NOT_FOUND)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(@Param('slug') slug: string): Promise<HttpRedirectResponse> {
+    const url = await this.videosService.getPlaybackUrl(slug, 'download');
+    return { url, statusCode: HttpStatus.FOUND };
   }
 
   @Post(':id/upload/parts')

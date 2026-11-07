@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 9/16 completed
+**SIs:** 10/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -124,9 +124,16 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.10 — Streaming and Download by Unique Slug (GET /videos/:slug/stream, GET /videos/:slug/download)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 35 passing: `src/videos/download-filename.util.spec.ts` 16 (new, unit), `src/videos/videos.service.spec.ts` +7 (unit, now 51), `src/videos/videos.service.integration-spec.ts` +6 (real DB + `minio`, now 19), and `test/videos-playback.e2e-spec.ts` 6, which covers all 6 scenarios of `nestjs-project/specs/videos-playback.plan.md` (follows `Location` with `fetch` against real minio: 206 + bytes + `Content-Range` for stream, exact `Content-Disposition` for download). Full suites: 37 suites / 322 tests; e2e 8 suites / 99 tests.
+- **Observations:**
+  - `buildDownloadContentDisposition(title, originalFilename)` (`src/videos/download-filename.util.ts`) follows the plan's order: remove `\p{Cc}` and `/ \ : * ? " < > |` → collapse `\s+` to one space → trim leading spaces and trailing spaces/dots → `video` if empty. Because control characters are removed before the collapse, a tab between two words joins them instead of becoming a space (literal reading of the plan's order). The extension is whatever follows the last `.` in `original_filename`, lower-cased and kept only if it matches `^[a-z0-9]{1,10}$`, the same "last extension" rule as `deriveVideoTitle`. `<ascii>` replaces each non-ASCII *code point* with one `_`, so an emoji becomes a single `_`. `<encoded>` is `encodeURIComponent` plus `'()*` → `%27 %28 %29 %2A` (the MDN `encodeRFC5987ValueChars` recipe, minus its optional `|`/`` ` ``/`^` un-escaping). `*` is already removed by sanitizing, so the `%2A` branch can't be reached through the public function.
+  - `VideosService.getPlaybackUrl(slug, mode)`: `findOne({ where: { slug, status: READY } })` → `VideoNotFoundException` when missing, then `presignGetObject(originalKey(id), { client: 'public', expiresIn: PLAYBACK_URL_TTL_SECONDS, responseContentDisposition })`, with the disposition set only for `download` (`undefined` for `stream`, so the URL has no `response-*` params). `PlaybackMode = 'stream' | 'download'` is exported from the service.
+  - Controller: `@Get(':slug/stream')` / `@Get(':slug/download')` with `@Public()`, `@Redirect()`, `@Header('Cache-Control', 'no-store')`, returning `HttpRedirectResponse` `{ url, statusCode: 302 }`. There is no `@ApiBearerAuth`, and `@ApiResponse` covers 302 (`Location` + `Cache-Control` headers) and 404. Nest applies `@Header` before the handler runs, so the 404 error responses also carry `Cache-Control: no-store` (harmless). Routes don't collide: `:slug/stream|download` are two segments, `GET :id` is one and `:id/upload/parts` is three. `openapi.json` only gained lines (+100), and both paths have no `security`.
+  - The e2e and integration specs seed `ready` rows directly through the repository, plus `StorageService.putObject` of 2048 random bytes (Step 7 choice), and delete `videos/{id}/original` for every row in `beforeEach`/`afterAll`. The e2e `describe` label is the feature stem `videos-playback`. The spec's `a.verylongext1` extension is 12 characters, not 11 as the spec says; it is omitted either way. The unit spec adds a real 11-character case (`a.verylongext`) and a 10-character keep case.
+  - Extra tests beyond the plan table: unit cases for a 10-character extension kept, multi-dot / non-alphanumeric / non-ASCII / empty extensions, NBSP collapse and surrogate pairs; a service unit test of the `findOne` filter; integration 404 cases for draft/processing/failed/unknown (the plan lists them only at the unit layer).
+  - context7: `/nestjs/docs.nestjs.com` (`@Redirect()` + returning an `HttpRedirectResponse` overrides url/statusCode; `@Header('Cache-Control', 'no-store')`; checked against the installed `@nestjs/core` 11.1.16 `router-execution-context.js`: headers are set before the handler, and an empty `@Redirect()` url (`''`) still selects the redirect path); `/nestjs/swagger` (`ApiResponse` `headers` = OpenAPI `HeadersObject`; 11.4.2 installed); `/mdn/content` (RFC 5987 `encodeRFC5987ValueChars`, `filename` + `filename*` both recommended). No version mismatch affects this code.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.11 — Infra: Video Worker Runtime and Compose Service
 - **Status:** pending
