@@ -276,4 +276,59 @@ describe('VideoLifecycleService (integration)', () => {
       );
     });
   });
+
+  describe('markProcessingFailed', () => {
+    it('moves a processing video to failed with the reason', async () => {
+      const id = await insertVideo(VideoStatus.PROCESSING, null);
+
+      await expect(
+        lifecycle.markProcessingFailed(id, 'INVALID_MEDIA'),
+      ).resolves.toBe(true);
+
+      await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.FAILED,
+          failure_reason: 'INVALID_MEDIA',
+        }),
+      );
+    });
+
+    it('updates only the targeted video', async () => {
+      const target = await insertVideo(VideoStatus.PROCESSING, null);
+      const other = await insertVideo(VideoStatus.PROCESSING, null);
+
+      await lifecycle.markProcessingFailed(target, 'PROCESSING_FAILED');
+
+      await expect(
+        videoRepository.findOneByOrFail({ id: other }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.PROCESSING,
+          failure_reason: null,
+        }),
+      );
+    });
+
+    it.each([VideoStatus.DRAFT, VideoStatus.READY, VideoStatus.FAILED])(
+      'returns false and leaves a %s video unchanged',
+      async (status) => {
+        const id = await insertVideo(status, null);
+        const before = await videoRepository.findOneByOrFail({ id });
+
+        await expect(
+          lifecycle.markProcessingFailed(id, 'SOURCE_MISSING'),
+        ).resolves.toBe(false);
+
+        await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+          before,
+        );
+      },
+    );
+
+    it('returns false for an unknown id', async () => {
+      await expect(
+        lifecycle.markProcessingFailed(randomUUID(), 'PROCESSING_FAILED'),
+      ).resolves.toBe(false);
+    });
+  });
 });

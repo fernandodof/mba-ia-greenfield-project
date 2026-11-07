@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 13/16 completed
+**SIs:** 14/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -172,9 +172,19 @@
   - Manual check: after `docker compose restart video-worker`, the logs show `MediaModule` loaded and no errors, and the worker holds `bull:video-processing:stalled-check`. A `processing` row with a 3 s 640×360 MP4, enqueued on the dev `bull` prefix, became `ready` (`duration_ms` 3000, h264, `thumbnail.jpg` `image/jpeg`); the test data was removed afterwards.
 
 ### SI-03.14 — Terminal Failure Handling and Configurable Worker Concurrency
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 32 new passing. `src/video-worker/video.processor.spec.ts` (20, mocked service/lifecycle/config, stubbed `worker`): `process` delegates; `job` undefined and missing / empty / non-string / no-data `videoId` → no write; transient failure on attempt 1 and 2 of 3 → no write; last attempt → `PROCESSING_FAILED`; job without `attempts` → treated as single attempt; `UnrecoverableError` by name only and plain `UnrecoverableError` → `PROCESSING_FAILED`; `VideoProcessingFailure` → its reason (`INVALID_MEDIA` / `THUMBNAIL_FAILED` / `SOURCE_MISSING`); guarded miss resolves; lifecycle throwing → logged, not rethrown; `onApplicationBootstrap` sets `worker.concurrency` to 1 / 2 / 4. `src/video-worker/video.processor.integration-spec.ts` (6, `VideoWorkerModule` with `init()`, real Redis `bull-test` + Postgres + minio + ffmpeg): random-bytes original → `failed`/`INVALID_MEDIA` with `attemptsMade` 1; no original → `failed`/`SOURCE_MISSING`; valid MP4 → `ready`; job without `videoId` → other `processing` row untouched; VIDEO_WORKER_CONCURRENCY unset → 1, `=2` → 2. `src/videos/video-lifecycle.service.integration-spec.ts` (+6): `markProcessingFailed` writes status + reason, targets one row, `false` from `draft`/`ready`/`failed`, unknown id. Full suites: 45 suites / 434 tests; e2e 8 suites / 99 tests.
+- **Observations:**
+  - `isLastAttempt` is `job.attemptsMade >= (job.opts.attempts ?? 1)`. A missing `attempts` counts as 1, the same as BullMQ's own retry check (bullmq 6.7.1 `Job.shouldRetryJob`); the plan's literal `>= job.opts.attempts` would never fire for such a job. Our jobs always carry `attempts: 3`.
+  - bullmq 6.7.1 `Job.moveToFailed` increments `attemptsMade` before the worker emits `failed`, so the last attempt arrives with `attemptsMade === opts.attempts`, and `failed` also fires for attempts that will be retried (checked in the installed source).
+  - `VideoProcessingFailure`'s `name` is not `UnrecoverableError`, so it is detected with `instanceof`; the name check covers plain `UnrecoverableError`s from other realms/copies, as BullMQ does.
+  - `ProcessingFailureReason` (the 4 codes) is exported from `video-lifecycle.service.ts`, next to `DraftFailureReason`.
+  - A recorded failure logs a `warn` with the reason and error message; a guarded miss logs at `log` level; a write error logs `error` with the stack. `onApplicationBootstrap` logs the applied concurrency.
+  - Integration waits are deterministic: the row is polled with a 30 s deadline (the handler writes after the event); the no-`videoId` case waits on the worker's own `failed` event for that job id (listeners run in registration order, so the handler's synchronous guards have already run). The in-process worker starts after `obliterate({ force: true })` of the `bull-test` queue, and `afterAll` obliterates again, deletes the minio objects and closes the module (Jest exits on its own).
+  - The "retry on the 3rd attempt" AC is covered at unit level (`attemptsMade` vs `opts.attempts`): the real backoff starts at 10 s, and a transient failure cannot be produced on demand with the real infrastructure.
+  - The concurrency AC boots `VideoWorkerModule` twice: with VIDEO_WORKER_CONCURRENCY deleted from `process.env` (Joi/config default 1) and with `'2'`. The `registerAs` factory reads `process.env` at module compile time.
+  - Manual check: after `docker compose restart video-worker`, the logs show `video-processing worker concurrency: 1` and no errors.
+  - context7 `/nestjs/bull` confirms that `WorkerHost.worker` throws before `BullExplorer` assigns it at `onModuleInit` and is safe from `onApplicationBootstrap`, and that `@OnWorkerEvent` handlers are bound with `worker.on(event, handler)`. `/taskforcesh/bullmq/v6.5.3` confirms `worker.concurrency = n` at runtime (setter validates finite `>= 1`), the `failed(job: Job | undefined, error, prev)` signature, and `QueueEvents`. `QueueEvents` was not used: its `failed` fires before the handler's async DB write, so polling the row is deterministic. `/typeorm/typeorm` (master) confirms `update(criteria, partial)` → `UpdateResult.affected` (pg `rowCount`); the array-of-updates form it also shows is newer than the installed 0.3.28 and was not used.
 
 ### SI-03.15 — Maintenance Sweeper: Stuck Processing Reconciliation and Draft Expiry
 - **Status:** pending

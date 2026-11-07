@@ -10,6 +10,15 @@ export type DraftFailureReason = Extract<
   'UPLOAD_ABORTED' | 'UPLOAD_EXPIRED' | 'UPLOAD_SIZE_MISMATCH'
 >;
 
+/**
+ * The reasons a `processing` video can end in `failed` (TD-09, TD-12):
+ * a permanent media problem, or `PROCESSING_FAILED` once retries run out.
+ */
+export type ProcessingFailureReason = Extract<
+  VideoFailureReason,
+  'INVALID_MEDIA' | 'THUMBNAIL_FAILED' | 'SOURCE_MISSING' | 'PROCESSING_FAILED'
+>;
+
 /** What the worker writes on `processing → ready` (TD-09 AMB-2/AMB-3). */
 export interface VideoReadyMetadata {
   durationMs: number;
@@ -77,6 +86,21 @@ export class VideoLifecycleService {
         video_codec: metadata.videoCodec,
         thumbnail_key: metadata.thumbnailKey,
       },
+    );
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * `processing → failed` with the given reason (TD-12 AMB-1): the terminal
+   * write of the worker's `failed` handler and of the sweeper.
+   */
+  async markProcessingFailed(
+    id: string,
+    reason: ProcessingFailureReason,
+  ): Promise<boolean> {
+    const result = await this.videoRepository.update(
+      { id, status: VideoStatus.PROCESSING },
+      { status: VideoStatus.FAILED, failure_reason: reason },
     );
     return (result.affected ?? 0) > 0;
   }
