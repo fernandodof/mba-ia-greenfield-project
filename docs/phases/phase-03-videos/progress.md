@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/16 completed
+**SIs:** 5/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -51,9 +51,15 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.5 — Video Naming and Sizing Rules
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 31 passing (`src/common/validators/max-code-points.validator.spec.ts` 11, `src/videos/video-title.util.spec.ts` 11, `src/videos/video-slug.util.spec.ts` 3, `src/videos/video.constants.spec.ts` 6); full suites 32 suites / 218 tests, e2e 3 suites / 52 tests
+- **Observations:**
+  - `@MaxCodePoints(n, options?)` uses `registerDecorator` with an inline validator object (`validate` + `defaultMessage`), as in the class-validator 0.14 README (context7 `/typestack/class-validator/v0.14.0`; installed 0.14.4, `ValidationDecoratorOptions` checked in the installed typings). The constraint name is exported as `MAX_CODE_POINTS` (`'maxCodePoints'`); the default message is `<property> must be a string with at most <n> characters`. `undefined`/`null` fail like any non-string, so optional fields need `@IsOptional()` (the plan's `title` rules already have it).
+  - Small additions beyond the plan's names: `VIDEO_TITLE_MAX_CODE_POINTS = 100` exported from `video-title.util.ts` (the derivation's cut), so SI-03.6's DTO can use it instead of a bare `100`. The slug byte count is a private constant in `video-slug.util.ts`.
+  - `deriveVideoTitle` follows the plan's order literally: drop the last extension, trim, cut to 100. A cut that lands right after a space can leave a trailing space in the derived title; the plan doesn't re-trim, so it was left as written.
+  - The `video.constants.ts` constants are plain `export const` numbers (literal types without `as const`, which only matters for objects/arrays). `video-storage-keys.ts` (`originalKey`/`thumbnailKey`) belongs to SI-03.6 in the plan, so it was not created here.
+  - Tests added beyond the plan's list: a custom `message` override for `@MaxCodePoints`, an empty string passing, `truncateCodePoints` on its own, a whitespace-only name falling back to the trimmed filename, a 300-emoji filename, and a check that `computePartCount(VIDEO_MAX_SIZE_BYTES) === VIDEO_MAX_PART_COUNT`.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.6 — Start Upload and Owner Read (POST /videos, GET /videos/:id)
 - **Status:** pending
