@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 11/16 completed
+**SIs:** 12/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -149,9 +149,16 @@
   - context7: `/nestjs/docs.nestjs.com` confirms `createApplicationContext` (initializes on creation) and `enableShutdownHooks` (the shutdown hooks run on SIGTERM only when it is enabled). `/nestjs/bull` confirms `registerQueue` (`name`, `defaultJobOptions`, and an `onApplicationShutdown` that closes the workers and the queue). `/websites/docker_compose` confirms the `depends_on` conditions `service_healthy` / `service_completed_successfully`. The current Compose docs also suggest `pre_start` instead of one-shot init services; the plan's one-shot `minio-init` was kept (installed Compose v2.35.1, and the docs still endorse the shared one-shot pattern). The master docs show Zod `validationSchema`; the installed `@nestjs/config` 4.0.3 + Joi pattern was kept.
 
 ### SI-03.12 — Media Toolkit: ffprobe/ffmpeg Wrapper with Failure Classification
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 45 passing. `src/media/ffmpeg.service.spec.ts` (39, mocked `EXEC_FILE`): planned ffprobe/ffmpeg arguments and options, the 8 transient patterns in mixed case for probe and frame, timeout (`killed` and `ETIMEDOUT`) → transient, other stderr → `InvalidMediaError` (probe) / `null` (frame), bad JSON / no video stream / duration 0, missing or `N/A` → invalid, duration rounding, empty stdout → `null`. `src/media/ffmpeg.service.integration-spec.ts` (5, real ffmpeg + minio, lavfi fixtures in `os.tmpdir()`): 2 s 320×240 probe, JPEG frame at t = 1, 1920×1200 → 1152×720 downscale, random bytes → invalid, `http://minio:9/…` → transient. `src/media/media.module.spec.ts` (1). Full suites: 41 suites / 368 tests; e2e 8 suites / 99 tests.
+- **Observations:**
+  - On Node 25 a `timeout` kill rejects with `killed: true`, `signal: 'SIGTERM'`, `code: null` (checked in the container), not `code: 'ETIMEDOUT'`. Both are treated as a timeout, and stderr stays available as a Buffer on the rejection.
+  - Only real process exits (numeric `code`) are classified by stderr. Other rejections (spawn `ENOENT`, `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`, a foreign signal) are rethrown as-is, so the job retries them instead of recording invalid media or skipping to the thumbnail fallback. The plan doesn't cover these cases.
+  - `probe` also rejects a video stream with no positive integer `width`/`height` or no `codec_name` as `InvalidMediaError`, so a `ready` row always has its metadata. This check is extra to the plan's list.
+  - Error messages carry the stderr with the presigned query string stripped (capped at 500 chars), so signatures don't reach BullMQ's `failedReason`.
+  - The `EXEC_FILE` token is a `Symbol`, defined in `media.constants.ts` together with the `ExecFileFn` type and `isTransientFfmpegStderr`. The patterns constant uses `as const`.
+  - `createTestVideo` takes optional `width`/`height` (default 320×240) for the extra downscale test, and also passes `-v error -y`.
+  - Every flag was verified on the installed 5.1.9 binary: `-print_format json`, `-show_format`, `-show_streams`, and `scale`'s `force_original_aspect_ratio` and `force_divisible_by`. The JSON output has `format.duration` as a string, plus `streams[].codec_type`, `codec_name`, `width` and `height`. No 8.x-only option is used.
 
 ### SI-03.13 — Video Processing Job: Metadata, Thumbnail and Ready Transition
 - **Status:** pending
