@@ -175,7 +175,7 @@ Deliver video upload of files up to 10 GB straight to S3-compatible object stora
 ### SI-03.6 — Start Upload and Owner Read (POST /videos, GET /videos/:id)
 
 **Route:** POST /videos, GET /videos/:id
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-start-upload.plan.md`
 **Authorization:** Authenticated (POST); Owner (GET — non-owner → `404`)
 
 **Description:** Pre-register the video as a `draft` in the caller's channel while opening the S3 multipart session, and let the owner read the video's lifecycle state — the entry point of the upload flow and the first `VideosController` routes.
@@ -212,7 +212,7 @@ Deliver video upload of files up to 10 GB straight to S3-compatible object stora
 ### SI-03.7 — Part Signing and Upload Resume (POST/GET /videos/:id/upload/parts)
 
 **Route:** POST /videos/:id/upload/parts, GET /videos/:id/upload/parts
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-parts.plan.md`
 **Authorization:** Owner (non-owner → `404`)
 
 **Description:** Hand the owner short-lived presigned part URLs so the file bytes go straight to storage (never through the API), and list already-uploaded parts so an interrupted upload can resume.
@@ -247,7 +247,7 @@ Deliver video upload of files up to 10 GB straight to S3-compatible object stora
 ### SI-03.8 — Abort Upload (DELETE /videos/:id/upload)
 
 **Route:** DELETE /videos/:id/upload
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-abort.plan.md`
 **Authorization:** Owner (non-owner → `404`)
 
 **Description:** Let the owner abort an in-progress upload, releasing storage and keeping the row as an auditable `failed`/`UPLOAD_ABORTED` video; introduces `VideoLifecycleService` as the single home of guarded status writes.
@@ -282,7 +282,7 @@ Deliver video upload of files up to 10 GB straight to S3-compatible object stora
 ### SI-03.9 — Complete Upload and Enqueue Processing (POST /videos/:id/upload/complete)
 
 **Route:** POST /videos/:id/upload/complete
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-complete.plan.md`
 **Authorization:** Owner (non-owner → `404`)
 
 **Description:** Finish the multipart upload, verify the stored size, move the video `draft → processing` and enqueue the processing job after the commit — idempotent across retries and across the storage-complete/DB-commit crash window.
@@ -321,7 +321,7 @@ Deliver video upload of files up to 10 GB straight to S3-compatible object stora
 ### SI-03.10 — Streaming and Download by Unique Slug (GET /videos/:slug/stream, GET /videos/:slug/download)
 
 **Route:** GET /videos/:slug/stream, GET /videos/:slug/download
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-playback.plan.md`
 **Authorization:** Public (`@Public()`), `ready` videos only
 
 **Description:** Serve playback and download of `ready` videos through their unique slug by redirecting to short-lived presigned GET URLs, so storage handles `Range`/`206` and the API stays out of the data path.
