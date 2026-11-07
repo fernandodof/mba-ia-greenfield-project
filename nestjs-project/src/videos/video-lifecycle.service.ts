@@ -44,6 +44,41 @@ export class VideoLifecycleService {
     return this.videoRepository.findOneBy({ id });
   }
 
+  /**
+   * `processing` videos whose `processing_started_at` is older than
+   * `olderThanMs` (TD-13 AMB-1). The threshold is computed in SQL, so the DB
+   * clock is the only clock; the column is `timestamptz`, compared to `now()`.
+   */
+  findStuckProcessing(olderThanMs: number): Promise<Video[]> {
+    return this.videoRepository
+      .createQueryBuilder('video')
+      .where('video.status = :status', { status: VideoStatus.PROCESSING })
+      .andWhere(
+        "video.processing_started_at < now() - CAST(:olderThanMs AS double precision) * interval '1 millisecond'",
+        { olderThanMs },
+      )
+      .orderBy('video.processing_started_at', 'ASC')
+      .getMany();
+  }
+
+  /**
+   * `draft` videos created more than `olderThanMs` ago (TD-04 AMB-6).
+   * `created_at` is a `timestamp` written by the DB default `now()` in the
+   * session time zone, so it is compared to `LOCALTIMESTAMP` (same type, same
+   * zone): no implicit cast on the column, and the DB clock stays the only clock.
+   */
+  findExpiredDrafts(olderThanMs: number): Promise<Video[]> {
+    return this.videoRepository
+      .createQueryBuilder('video')
+      .where('video.status = :status', { status: VideoStatus.DRAFT })
+      .andWhere(
+        "video.created_at < LOCALTIMESTAMP - CAST(:olderThanMs AS double precision) * interval '1 millisecond'",
+        { olderThanMs },
+      )
+      .orderBy('video.created_at', 'ASC')
+      .getMany();
+  }
+
   /** `draft → failed` with the given reason, clearing the upload session. */
   async failDraft(id: string, reason: DraftFailureReason): Promise<boolean> {
     const result = await this.videoRepository.update(

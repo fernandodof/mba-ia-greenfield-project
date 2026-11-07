@@ -12,7 +12,10 @@ import {
   VIDEO_MAINTENANCE_QUEUE,
 } from '../videos/video-queue.constants';
 import { VideosModule } from '../videos/videos.module';
+import { VideoMaintenanceProcessor } from './video-maintenance.processor';
 import { VideoProcessingService } from './video-processing.service';
+import { VideoSweeperScheduler } from './video-sweeper.scheduler';
+import { VideoSweeperService } from './video-sweeper.service';
 import { VideoProcessor } from './video.processor';
 
 // Root module of the video worker process (src/worker.ts): no HTTP server and
@@ -22,7 +25,8 @@ import { VideoProcessor } from './video.processor';
 // target of `Channel.user` (Video -> Channel -> User); without it TypeORM
 // cannot build the entity metadata. AppModule gets it through AuthModule.
 // VideoProcessor (the `video-processing` consumer) lives only here: the API
-// produces jobs but never registers a processor (TD-08).
+// produces jobs but never registers a processor (TD-08). The sweeper
+// (service, `video-maintenance` processor, boot-time scheduler) is worker-only.
 @Module({
   imports: [
     ConfigModule.forRoot(configModuleOptions),
@@ -37,6 +41,12 @@ import { VideoProcessor } from './video.processor';
       defaultJobOptions: VIDEO_MAINTENANCE_JOB_OPTIONS,
     }),
   ],
-  providers: [VideoProcessingService, VideoProcessor],
+  providers: [
+    VideoProcessingService,
+    VideoProcessor,
+    VideoSweeperService,
+    VideoMaintenanceProcessor,
+    VideoSweeperScheduler,
+  ],
 })
 export class VideoWorkerModule {}

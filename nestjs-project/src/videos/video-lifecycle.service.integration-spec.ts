@@ -331,4 +331,88 @@ describe('VideoLifecycleService (integration)', () => {
       ).resolves.toBe(false);
     });
   });
+
+  /** Ages a row through SQL, so the DB clock stays the only clock. */
+  async function backdate(
+    id: string,
+    column: 'created_at' | 'processing_started_at',
+    ms: number,
+  ): Promise<void> {
+    await dataSource.query(
+      `UPDATE "videos" SET "${column}" = "${column}" - $2 * interval '1 millisecond' WHERE "id" = $1`,
+      [id, ms],
+    );
+  }
+
+  async function insertProcessingVideo(): Promise<string> {
+    const id = await insertVideo(VideoStatus.DRAFT, null);
+    await lifecycle.markProcessing(id);
+    return id;
+  }
+
+  describe('findStuckProcessing', () => {
+    it('returns processing videos started before the threshold, oldest first', async () => {
+      const older = await insertProcessingVideo();
+      const old = await insertProcessingVideo();
+      await insertProcessingVideo(); // fresh
+      await backdate(older, 'processing_started_at', 20 * 60_000);
+      await backdate(old, 'processing_started_at', 10 * 60_000);
+
+      const rows = await lifecycle.findStuckProcessing(5 * 60_000);
+
+      expect(rows.map((row) => row.id)).toEqual([older, old]);
+    });
+
+    it('ignores non-processing videos even when their timestamps are old', async () => {
+      const draft = await insertVideo(VideoStatus.DRAFT, 'upload-1');
+      const failed = await insertProcessingVideo();
+      await lifecycle.markProcessingFailed(failed, 'PROCESSING_FAILED');
+      await backdate(draft, 'created_at', 60 * 60_000);
+      await backdate(failed, 'processing_started_at', 60 * 60_000);
+
+      await expect(lifecycle.findStuckProcessing(60_000)).resolves.toEqual([]);
+    });
+
+    it('does not return a processing video younger than the threshold', async () => {
+      const id = await insertProcessingVideo();
+      await backdate(id, 'processing_started_at', 60_000);
+
+      await expect(lifecycle.findStuckProcessing(5 * 60_000)).resolves.toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('findExpiredDrafts', () => {
+    it('returns drafts created before the threshold, oldest first', async () => {
+      const older = await insertVideo(VideoStatus.DRAFT, 'upload-1');
+      const old = await insertVideo(VideoStatus.DRAFT, 'upload-2');
+      await insertVideo(VideoStatus.DRAFT, 'upload-3'); // fresh
+      await backdate(older, 'created_at', 20 * 60_000);
+      await backdate(old, 'created_at', 10 * 60_000);
+
+      const rows = await lifecycle.findExpiredDrafts(5 * 60_000);
+
+      expect(rows.map((row) => row.id)).toEqual([older, old]);
+      expect(rows[0].upload_id).toBe('upload-1');
+    });
+
+    it('ignores non-draft videos even when they were created long ago', async () => {
+      const processing = await insertProcessingVideo();
+      const ready = await insertVideo(VideoStatus.READY, null);
+      await backdate(processing, 'created_at', 60 * 60_000);
+      await backdate(ready, 'created_at', 60 * 60_000);
+
+      await expect(lifecycle.findExpiredDrafts(60_000)).resolves.toEqual([]);
+    });
+
+    it('does not return a draft younger than the threshold', async () => {
+      const id = await insertVideo(VideoStatus.DRAFT, 'upload-1');
+      await backdate(id, 'created_at', 60_000);
+
+      await expect(lifecycle.findExpiredDrafts(5 * 60_000)).resolves.toEqual(
+        [],
+      );
+    });
+  });
 });

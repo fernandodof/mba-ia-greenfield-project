@@ -12,8 +12,10 @@ import { User } from '../users/entities/user.entity';
 import { Video } from '../videos/entities/video.entity';
 import { VideoProcessingQueue } from '../videos/video-processing.queue';
 import {
+  VIDEO_MAINTENANCE_QUEUE,
   VIDEO_PROCESS_JOB,
   VIDEO_PROCESSING_QUEUE,
+  VIDEO_SWEEPER_SCHEDULER_ID,
   type VideoProcessingJobData,
 } from '../videos/video-queue.constants';
 import { originalKey, thumbnailKey } from '../videos/video-storage-keys';
@@ -38,6 +40,16 @@ async function startWorker(): Promise<TestingModule> {
     .obliterate({ force: true });
   await module.init();
   return module;
+}
+
+/**
+ * `init()` also registers the `video-sweeper` scheduler (SI-03.15) on
+ * `bull-test`; remove it so no scheduler or sweep job outlives the suite.
+ */
+async function removeSweeperScheduler(module: TestingModule): Promise<void> {
+  const maintenance = module.get<Queue>(getQueueToken(VIDEO_MAINTENANCE_QUEUE));
+  await maintenance.removeJobScheduler(VIDEO_SWEEPER_SCHEDULER_ID);
+  await maintenance.obliterate({ force: true });
 }
 
 /** Runs `fn` with VIDEO_WORKER_CONCURRENCY set (or unset), then restores it. */
@@ -89,6 +101,7 @@ describe('VideoProcessor (integration)', () => {
   afterAll(async () => {
     try {
       await queue.obliterate({ force: true });
+      await removeSweeperScheduler(module);
       for (const id of videoIds) {
         await storage.deleteObject(originalKey(id));
         await storage.deleteObject(thumbnailKey(id));
@@ -249,6 +262,7 @@ describe('VideoProcessor concurrency (integration)', () => {
     try {
       expect(module.get(VideoProcessor).worker.concurrency).toBe(2);
     } finally {
+      await removeSweeperScheduler(module);
       await module.close();
     }
   }, 30000);

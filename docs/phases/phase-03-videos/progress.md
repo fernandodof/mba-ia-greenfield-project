@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 14/16 completed
+**SIs:** 15/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -187,9 +187,17 @@
   - context7 `/nestjs/bull` confirms that `WorkerHost.worker` throws before `BullExplorer` assigns it at `onModuleInit` and is safe from `onApplicationBootstrap`, and that `@OnWorkerEvent` handlers are bound with `worker.on(event, handler)`. `/taskforcesh/bullmq/v6.5.3` confirms `worker.concurrency = n` at runtime (setter validates finite `>= 1`), the `failed(job: Job | undefined, error, prev)` signature, and `QueueEvents`. `QueueEvents` was not used: its `failed` fires before the handler's async DB write, so polling the row is deterministic. `/typeorm/typeorm` (master) confirms `update(criteria, partial)` → `UpdateResult.affected` (pg `rowCount`); the array-of-updates form it also shows is newer than the installed 0.3.28 and was not used.
 
 ### SI-03.15 — Maintenance Sweeper: Stuck Processing Reconciliation and Draft Expiry
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 28 new passing. `src/video-worker/video-sweeper.service.spec.ts` (15, mocked lifecycle/queue/storage/config): thresholds come from config; job `missing`/`unknown` → `enqueue`; `failed` → `markProcessingFailed(PROCESSING_FAILED)`, no re-add; `completed` → `removeJob` then `enqueue`; `waiting`/`delayed`/`prioritized`/`active`/`waiting-children` → untouched; an error on one stuck row is logged and the next row plus the draft branch still run; draft: abort → delete → `failDraft(UPLOAD_EXPIRED)` in that order; no `upload_id` → no abort, still delete + fail; abort error on one draft skips it and the next draft is expired; delete error → no `failDraft`. `src/video-worker/video-sweeper.service.integration-spec.ts` (5, `VideoWorkerModule` compiled without `init()`, `videoConfig.KEY` overridden to 5 min / 10 min, rows aged 60 min by SQL `UPDATE`; real Postgres + Redis `bull-test` + minio): stuck row without a job → `process` job `jobId = videoId` waiting; retained failed job (fetched and failed by hand with a manual `Worker`) → `failed`/`PROCESSING_FAILED`, job still `failed`, nothing waiting; waiting job → untouched; expired draft with a live multipart upload and an original → upload gone (`ListParts` → `UploadSessionNotFoundError`), original absent, `failed`/`UPLOAD_EXPIRED`, `upload_id` NULL; fresh draft and fresh processing row untouched. `src/video-worker/video-sweeper.scheduler.integration-spec.ts` (2, real Redis `bull-test`, queue + scheduler only): `getJobScheduler('video-sweeper')` has `name: 'sweep'` and `every` = configured 123000; a second bootstrap leaves exactly one scheduler; `afterAll` removes the scheduler and obliterates the queue. `src/videos/video-lifecycle.service.integration-spec.ts` (+6): `findStuckProcessing` / `findExpiredDrafts` return only rows of their status older than the threshold, oldest first, and skip younger rows. `video-worker.module.spec.ts` asserts the 3 new providers. Full suites: 48 suites / 462 tests; e2e 8 suites / 99 tests.
+- **Observations:**
+  - Thresholds are computed in SQL as `CAST(:olderThanMs AS double precision) * interval '1 millisecond'`. The CAST keeps the parameter type explicit, and TypeORM's `:name` parser rules out `::`. `processing_started_at` (`timestamptz`) is compared to `now()`. `created_at` (`timestamp`, written by the DB default `now()` in the session time zone, `Etc/UTC` here) is compared to `LOCALTIMESTAMP`: same type, so the column needs no implicit `timestamptz` cast and the `(status, created_at)` index stays usable. The plan writes `now()` for both; the result is the same while the session time zone stays constant.
+  - BullMQ 6 (context7, "immediately" deprecated since 5.19): a **new** scheduler runs its first job at once; later upserts follow `every`. So every `VideoWorkerModule.init()` on `bull-test` also starts the maintenance worker and runs one sweep. The SI-03.14 `video.processor.integration-spec.ts` therefore now removes the `video-sweeper` scheduler and obliterates `bull-test:video-maintenance` in its cleanup (the only change to an SI-03.14 file). Its rows are fresh, so that sweep has nothing to do.
+  - `NoSuchUpload` on abort is already a no-op inside `StorageService.abortMultipartUpload`. A draft with `upload_id = NULL` skips the abort and still gets the delete + `failDraft`. Any other storage error (abort or delete) is logged and the row stays `draft` for the next tick.
+  - The per-row catch-and-log covers both branches (background-task exception). Errors from the two `find*` queries are not caught, so the sweep job fails. That is fine: `attempts: 1`, and the next tick sweeps again.
+  - Logs: `warn` on re-enqueue / PROCESSING_FAILED, `log` on draft expiry and on scheduler registration, `error` + stack on a row error. A `false` from a guarded write (row moved meanwhile) is silent.
+  - The "completed → remove + re-add" and "active" ACs are unit-only. `removeOnComplete: true` drops completed jobs, and an active job needs a running worker. "Waiting" is also covered by integration.
+  - The scheduler spec does not register the maintenance processor, so the immediate first job is never consumed on the shared DB.
+  - Manual check: after `docker compose restart video-worker`, the logs show `video-sweeper scheduled every 900000 ms` with no errors. On the `bull` prefix, `getJobScheduler('video-sweeper')` gives `every: 900000` with `iterationCount: 2` (the immediate sweep ran and completed), 1 scheduler, 1 delayed `sweep` job, 0 failed. The dev DB had 0 `videos` rows, so the sweep changed nothing.
 
 ### SI-03.16 — End-to-End Video Pipeline Verification
 - **Status:** pending

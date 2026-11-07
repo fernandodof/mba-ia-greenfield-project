@@ -9,12 +9,15 @@ import {
   VIDEO_MAINTENANCE_QUEUE,
   VIDEO_PROCESSING_QUEUE,
 } from '../videos/video-queue.constants';
+import { VideoMaintenanceProcessor } from './video-maintenance.processor';
 import { VideoProcessingService } from './video-processing.service';
+import { VideoSweeperScheduler } from './video-sweeper.scheduler';
+import { VideoSweeperService } from './video-sweeper.service';
 import { VideoWorkerModule } from './video-worker.module';
 import { VideoProcessor } from './video.processor';
 
 describe('VideoWorkerModule', () => {
-  it('should compile with the real config, DB, storage, media, the video processor and both video queues, and release them on close', async () => {
+  it('should compile with the real config, DB, storage, media, the video and maintenance processors, the sweeper and both video queues, and release them on close', async () => {
     const module = await Test.createTestingModule({
       imports: [VideoWorkerModule],
     }).compile();
@@ -33,6 +36,15 @@ describe('VideoWorkerModule', () => {
         VideoProcessingService,
       );
       expect(module.get(VideoProcessor)).toBeInstanceOf(VideoProcessor);
+      expect(module.get(VideoSweeperService)).toBeInstanceOf(
+        VideoSweeperService,
+      );
+      expect(module.get(VideoMaintenanceProcessor)).toBeInstanceOf(
+        VideoMaintenanceProcessor,
+      );
+      expect(module.get(VideoSweeperScheduler)).toBeInstanceOf(
+        VideoSweeperScheduler,
+      );
 
       const processing = module.get<Queue>(
         getQueueToken(VIDEO_PROCESSING_QUEUE),
