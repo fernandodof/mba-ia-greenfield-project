@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 10/16 completed
+**SIs:** 11/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -136,9 +136,17 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.11 — Infra: Video Worker Runtime and Compose Service
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 1 passing (`src/video-worker/video-worker.module.spec.ts`, new: compiles `VideoWorkerModule` with the real config, Postgres, minio config and Redis under the `bull-test` prefix, checks both queues' options, and checks `module.close()` closes the DataSource). Full suites: 38 suites / 323 tests; e2e 8 suites / 99 tests (unchanged after the `AppModule` refactor).
+- **Observations:**
+  - **Deviation:** `VideoWorkerModule` also imports `UsersModule`, which is not in the plan's import list. `DatabaseModule` keeps `autoLoadEntities: true`, which registers only `forFeature` entities. The worker graph had `Video` and `Channel` but not `User`, the target of `Channel.user`, so TypeORM failed with `Entity metadata for Channel#user was not found` and retried forever. `UsersModule` owns `User`; the API gets it through `AuthModule`. The module spec goes red without it (verified). The alternatives were rejected: listing entities in `DatabaseModule` would change the API's factory, and registering `User` in another module breaks the "entity in its owning module" rule.
+  - `Dockerfile.dev` pins `ffmpeg=7:5.1.9-0+deb12u1`. The bookworm repo still serves that version and the build succeeded. `ffmpeg -version` / `ffprobe -version` report `5.1.9-0+deb12u1` in both `nestjs-api` and `video-worker`. The install line keeps the existing `apt update && apt install -y procps curl` form; the `--no-install-recommends` / list-cleanup variant in `library-refs.md` was not adopted, to keep the change minimal.
+  - `AppModule` now uses `ConfigModule.forRoot(configModuleOptions)` (`src/config/config-module.options.ts`) and `DatabaseModule` (`src/database/database.module.ts`). The `TypeOrmModule.forRootAsync` factory moved verbatim, including the pre-existing `DB_HOST` localhost default in `database.config.ts`, which is out of scope here.
+  - `src/worker.ts` uses `NestFactory.createApplicationContext(VideoWorkerModule)` + `enableShutdownHooks()` and logs `Video worker application context started` (`VideoWorker` logger). There is no processor yet (SI-03.13); `video-maintenance` is registered with `VIDEO_MAINTENANCE_JOB_OPTIONS`.
+  - Compose `video-worker` matches the Data Model table: same build/volume as `nestjs-api`, `command: npm run start:worker:dev`, `restart: unless-stopped`, no ports, and it depends on `db`/`redis` healthy and `minio-init` completed. Compose builds a separate image tag (`nestjs-project-video-worker`) from the same `Dockerfile.dev`.
+  - Shutdown: `docker compose stop video-worker` finishes in about 1 s. A check under ts-node showed that on SIGTERM the shutdown hooks leave the DataSource uninitialized and the BullMQ Redis client at `end` *before* Nest re-raises the signal. Because Nest re-raises SIGTERM after `app.close()`, npm (PID 1) logs `npm error command failed … signal SIGTERM` and the container exits with code 1. This is cosmetic: `unless-stopped` doesn't restart a manually stopped container.
+  - AC checks: `video-worker` was Up with 0 restarts after more than 30 s and stayed up during the full suites (0 error/warn log lines). `Ports` is empty. `GET /` → 200 (via `npm run build` + `node dist/main`, since `nestjs-api` runs `tail -f`). `npm run start:worker` (from `dist/`) also boots. The worker never runs `nest build`, so the shared `dist/` is left untouched. Redis holds only the `meta` keys of both queues for the `bull` and `bull-test` prefixes.
+  - context7: `/nestjs/docs.nestjs.com` confirms `createApplicationContext` (initializes on creation) and `enableShutdownHooks` (the shutdown hooks run on SIGTERM only when it is enabled). `/nestjs/bull` confirms `registerQueue` (`name`, `defaultJobOptions`, and an `onApplicationShutdown` that closes the workers and the queue). `/websites/docker_compose` confirms the `depends_on` conditions `service_healthy` / `service_completed_successfully`. The current Compose docs also suggest `pre_start` instead of one-shot init services; the plan's one-shot `minio-init` was kept (installed Compose v2.35.1, and the docs still endorse the shared one-shot pattern). The master docs show Zod `validationSchema`; the installed `@nestjs/config` 4.0.3 + Joi pattern was kept.
 
 ### SI-03.12 — Media Toolkit: ffprobe/ffmpeg Wrapper with Failure Classification
 - **Status:** pending
