@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 2/16 completed
+**SIs:** 3/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -27,9 +27,16 @@
   - Tests ran directly in the container, not through a test sub-agent (the agent runtime doesn't allow nested agent spawns unless the user asks).
 
 ### SI-03.3 — Queue Root Module and Shared Queue Contracts
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 5 passing (`src/queue/queue.module.integration-spec.ts`, against the real `redis` service); full suites 26 suites / 178 tests, e2e 3 suites / 52 tests
+- **Observations:**
+  - `@nestjs/bullmq` 12.0.1 and `@nestjs/bull-shared` 12.0.1 are ESM-only (`"type": "module"`). Node 25 `require()`s them at runtime and TS 5.9 `nodenext` accepts the import, so `tsc`, `nest build` and `node dist/main` work unchanged. Jest's CJS runtime can't load them, so both Jest configs (`package.json` `jest` and `test/jest-e2e.json`) gained `transformIgnorePatterns: ["/node_modules/(?!(@nestjs/bullmq|@nestjs/bull-shared)/)"]`. ts-jest 29.4.6 already transpiles JS from `node_modules` to CommonJS (no `allowJs` needed). These config edits weren't in the plan's technical actions; without them no test can import `@nestjs/bullmq`.
+  - Prefix on `@Processor` workers (checked with context7 `/nestjs/bull` and in the installed 12.0.1 source, `BullExplorer.handleProcessor`): the worker options are `{ connection, sharedConnection, prefix, telemetry, ...decoratorOptions }`, taken from the registered queue's resolved options (shared root config merged with the queue options) or, if no queue is registered, from the shared root config. The root `prefix` therefore reaches `@Processor` workers unless the decorator overrides it.
+  - BullMQ 6 removed `queue.client`; the raw connection is `queue.getBackend().client` (an ioredis wrapper that still exposes `status`). The spec inspects keys with its own `ioredis` client (closed with `quit()` in `afterAll`) and checks connection release through `getBackend().client.status === 'end'` after `module.close()`.
+  - A duplicate `add` with an existing `jobId` resolves to a `Job` object with the same `id`, but built from the second call's arguments; the stored job keeps the first payload. The spec checks the same id, an unchanged waiting count, and the stored data.
+  - `BullModule.forRootAsync` only stores the shared config. No Redis connection opens until a queue is registered (VideosModule, SI-03.9), so the AppModule e2e tests and `openapi:export` don't need extra teardown. Boot check: `node dist/main` logs `BullModule dependencies initialized` and `GET /` returns 200.
+  - The constants follow the plan's `satisfies JobsOptions` form verbatim, without the `as const` that `.claude/rules/nestjs-common-conventions.md` asks for. String constants are already literal types.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.4 — Video Entity, Migration and VideosModule Skeleton
 - **Status:** pending

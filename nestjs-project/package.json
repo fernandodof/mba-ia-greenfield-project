@@ -88,6 +88,9 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(@nestjs/bullmq|@nestjs/bull-shared)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
