@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/16 completed
+**SIs:** 6/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -62,9 +62,27 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.6 — Start Upload and Owner Read (POST /videos, GET /videos/:id)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 28 passing: `src/videos/videos.service.spec.ts` 11 (unit), `src/videos/videos.service.integration-spec.ts` 5 (real DB + `minio`), `src/channels/channels.service.integration-spec.ts` +2 (`findByUserId`), and `test/videos-start-upload.e2e-spec.ts` 10, which covers all 10 scenarios of `nestjs-project/specs/videos-start-upload.plan.md`. `src/videos/videos.module.spec.ts` was updated (it now needs the storage config and checks the controller and service). Full suites: 34 suites / 236 tests; e2e 4 suites / 62 tests.
+- **Observations:**
+  - **Plan deviation (accepted in Step 7):** `test/helpers/authenticated-user.ts` (`createAuthenticatedUser(app, dataSource, email, password?)`) is created here, not in SI-03.16. Every controller spec from SI-03.6 on needs register → confirm → login. The helper registers through `POST /auth/register`, sets `is_confirmed = true` through the repository, and logs in through `POST /auth/login`. SI-03.16 reuses it.
+  - **`test/jest-e2e.json` gained `"maxWorkers": 1`** (not in the plan). With two DB-touching e2e suites, a plain `npm run test:e2e` ran them in parallel and they wiped each other's tables (15 failures). `nestjs-project/CLAUDE.md` already says the e2e command is "already configured" to run serially; the config now matches that.
+  - Slug-collision retry: `repository.insert` (standalone, no transaction), retried only when the pg error is `23505` and its `detail` names `(slug)`. This is the same detection as `ChannelsService`. Every final failure (3 slug collisions, any other error) runs `abortMultipartUpload` and then rethrows.
+  - A missing channel throws a plain `Error` before any storage call (phase-02 invariant), as the plan says.
+  - `findOwnedById` uses `findOne({ where: { id, channel: { user_id } } })`. TypeORM turns the nested relation filter into an inner join on `channels`.
+  - The service returns the entity. The controller maps it with `VideoDto.fromEntity` (exactly the 14 fields of the API contract), so `upload_id`, `thumbnail_key` and `processing_started_at` never reach the HTTP layer.
+  - `ParseUUIDPipe` throws `BadRequestException`, and the existing `ValidationExceptionFilter` turns it into `400 VALIDATION_ERROR` with a message array. No new filter was needed.
+  - `CreateVideoDto` has only class-validator decorators and JSDoc, following the project's request-DTO rule. In `openapi.json`, `CreateVideoDto` therefore has empty `properties`, like every existing request DTO (`RegisterDto`, `LoginDto`, …). `openapi:export` runs through ts-node, which skips the Swagger CLI plugin. This is pre-existing and recorded as a follow-up. The response DTOs (`VideoUploadSessionDto`, `VideoDto`) use explicit `@ApiProperty` and are fully documented. The `openapi.json` diff only adds lines (`/videos`, `/videos/{id}`, 3 schemas plus `VideoStatus`).
+  - The e2e spec keeps minio clean: before each test and in `afterAll` it aborts the multipart session of every row that still has `upload_id`.
+  - context7 lookups:
+    - NestJS `ParseUUIDPipe` (`@Param('id', ParseUUIDPipe)`).
+    - `@nestjs/swagger` `@ApiProperty` / `@ApiResponse` / `@ApiBearerAuth`.
+    - class-validator 0.14 decorator signatures.
+    - class-transformer `@Transform(({ value }) => …)`.
+    - TypeORM nested relation `where` and `insert`/`save`.
+
+    TypeORM's context7 docs track master, while 0.3.28 is installed; the APIs used behave the same in 0.3.28. No other mismatch.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.7 — Part Signing and Upload Resume (POST/GET /videos/:id/upload/parts)
 - **Status:** pending

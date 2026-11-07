@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
@@ -88,6 +89,30 @@ describe('ChannelsService (integration)', () => {
 
       const channels = await channelRepository.find();
       expect(channels).toHaveLength(2);
+    });
+  });
+
+  describe('findByUserId', () => {
+    it("returns the user's channel", async () => {
+      const owner = await createUser();
+      const other = await createUser();
+      const created = await channelsService.createChannel(
+        owner.id,
+        'owner@example.com',
+      );
+      await channelsService.createChannel(other.id, 'other@example.com');
+
+      const found = await channelsService.findByUserId(owner.id);
+
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(created.id);
+      expect(found!.user_id).toBe(owner.id);
+    });
+
+    it('returns null for a user without a channel', async () => {
+      const found = await channelsService.findByUserId(randomUUID());
+
+      expect(found).toBeNull();
     });
   });
 });
