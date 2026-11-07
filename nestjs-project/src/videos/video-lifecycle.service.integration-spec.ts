@@ -191,4 +191,89 @@ describe('VideoLifecycleService (integration)', () => {
       await expect(lifecycle.markProcessing(randomUUID())).resolves.toBe(false);
     });
   });
+
+  describe('findById', () => {
+    it('returns the video row', async () => {
+      const id = await insertVideo(VideoStatus.PROCESSING, null);
+
+      await expect(lifecycle.findById(id)).resolves.toEqual(
+        expect.objectContaining({ id, status: VideoStatus.PROCESSING }),
+      );
+    });
+
+    it('returns null for an unknown id', async () => {
+      await expect(lifecycle.findById(randomUUID())).resolves.toBeNull();
+    });
+  });
+
+  describe('markReady', () => {
+    const metadata = {
+      durationMs: 2000,
+      width: 320,
+      height: 240,
+      videoCodec: 'h264',
+      thumbnailKey: 'videos/x/thumbnail.jpg',
+    };
+
+    it('moves a processing video to ready and writes every metadata column', async () => {
+      const id = await insertVideo(VideoStatus.PROCESSING, null);
+
+      await expect(lifecycle.markReady(id, metadata)).resolves.toBe(true);
+
+      await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.READY,
+          duration_ms: 2000,
+          width: 320,
+          height: 240,
+          video_codec: 'h264',
+          thumbnail_key: 'videos/x/thumbnail.jpg',
+          failure_reason: null,
+        }),
+      );
+    });
+
+    it('updates only the targeted video', async () => {
+      const target = await insertVideo(VideoStatus.PROCESSING, null);
+      const other = await insertVideo(VideoStatus.PROCESSING, null);
+
+      await lifecycle.markReady(target, metadata);
+
+      await expect(
+        videoRepository.findOneByOrFail({ id: other }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.PROCESSING,
+          duration_ms: null,
+          thumbnail_key: null,
+        }),
+      );
+    });
+
+    it.each([VideoStatus.DRAFT, VideoStatus.READY, VideoStatus.FAILED])(
+      'returns false and leaves a %s video unchanged',
+      async (status) => {
+        const id = await insertVideo(status, null);
+
+        await expect(lifecycle.markReady(id, metadata)).resolves.toBe(false);
+
+        await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+          expect.objectContaining({
+            status,
+            duration_ms: null,
+            width: null,
+            height: null,
+            video_codec: null,
+            thumbnail_key: null,
+          }),
+        );
+      },
+    );
+
+    it('returns false for an unknown id', async () => {
+      await expect(lifecycle.markReady(randomUUID(), metadata)).resolves.toBe(
+        false,
+      );
+    });
+  });
 });

@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 12/16 completed
+**SIs:** 13/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -161,9 +161,15 @@
   - Every flag was verified on the installed 5.1.9 binary: `-print_format json`, `-show_format`, `-show_streams`, and `scale`'s `force_original_aspect_ratio` and `force_divisible_by`. The JSON output has `format.duration` as a string, plus `streams[].codec_type`, `codec_name`, `width` and `height`. No 8.x-only option is used.
 
 ### SI-03.13 — Video Processing Job: Metadata, Thumbnail and Ready Transition
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 34 new passing. `src/video-worker/video-processing.service.spec.ts` (21, mocked lifecycle/storage/ffmpeg): happy path call order and arguments, non-`processing` (`draft`/`ready`/`failed`) and missing row → no-op, `headObject` `null` → `SOURCE_MISSING`, `HeadObject` error rethrown, `InvalidMediaError` → `INVALID_MEDIA`, transient probe rethrown as-is (not unrecoverable), `null` frame at `t > 0` → retry at `t = 0`, both `null` → `THUMBNAIL_FAILED`, transient frame at `t > 0` → rethrow without fallback, thumbnail `PutObject` error rethrown, `markReady` `false` → resolves, `t` for 0.4 s / 2 s / 10 s (plus `thumbnailOffsetSeconds` table). `src/video-worker/video-processing.service.integration-spec.ts` (5, real Postgres + minio + ffmpeg): 2 s MP4 → `ready` with metadata and a JPEG `thumbnail.jpg` (`image/jpeg`), 0.4 s MP4 → `ready` with thumbnail, `ready` row (redelivery) unchanged with no thumbnail written, random bytes → `VideoProcessingFailure` `INVALID_MEDIA` (row still `processing`), no object → `SOURCE_MISSING`. `src/videos/video-lifecycle.service.integration-spec.ts` (+8): `findById` row/null, `markReady` writes every column, targets one row, `false` from `draft`/`ready`/`failed`, unknown id. `src/video-worker/video-worker.module.spec.ts`: assertions for `VideoProcessingService` and `VideoProcessor`. Full suites: 43 suites / 402 tests; e2e 8 suites / 99 tests.
+- **Observations:**
+  - `process` also treats a missing row (`findById` → `null`) as a no-op, the same as a non-`processing` row.
+  - If `markReady` returns `false` (the row left `processing` during the attempt, e.g. the sweeper failed it), the service logs a warning and resolves. The job completes, and the thumbnail just written stays in storage. The plan doesn't cover this race.
+  - `VideoProcessingFailure(reason, message = reason, { cause })`: BullMQ's `UnrecoverableError` constructor only takes a message, so `cause` is assigned after `super`. BullMQ detects it with `instanceof UnrecoverableError` (bullmq 6.7.1 `job.js`); its `name` is `VideoProcessingFailure`.
+  - The `t` rule is the exported helper `thumbnailOffsetSeconds(durationMs) = min(1, durationMs / 2000)`.
+  - The AC "the API never registers the processor" is checked by grep: `VideoProcessor` is provided only by `VideoWorkerModule`. The unit test compiles `VideoWorkerModule` without `init()`, so no worker starts on `bull-test` during tests.
+  - Manual check: after `docker compose restart video-worker`, the logs show `MediaModule` loaded and no errors, and the worker holds `bull:video-processing:stalled-check`. A `processing` row with a 3 s 640×360 MP4, enqueued on the dev `bull` prefix, became `ready` (`duration_ms` 3000, h264, `thumbnail.jpg` `image/jpeg`); the test data was removed afterwards.
 
 ### SI-03.14 — Terminal Failure Handling and Configurable Worker Concurrency
 - **Status:** pending

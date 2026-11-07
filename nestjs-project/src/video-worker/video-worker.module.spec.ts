@@ -9,10 +9,12 @@ import {
   VIDEO_MAINTENANCE_QUEUE,
   VIDEO_PROCESSING_QUEUE,
 } from '../videos/video-queue.constants';
+import { VideoProcessingService } from './video-processing.service';
 import { VideoWorkerModule } from './video-worker.module';
+import { VideoProcessor } from './video.processor';
 
 describe('VideoWorkerModule', () => {
-  it('should compile with the real config, DB, storage and both video queues, and release them on close', async () => {
+  it('should compile with the real config, DB, storage, media, the video processor and both video queues, and release them on close', async () => {
     const module = await Test.createTestingModule({
       imports: [VideoWorkerModule],
     }).compile();
@@ -27,6 +29,10 @@ describe('VideoWorkerModule', () => {
       expect(module.get(VideoLifecycleService)).toBeInstanceOf(
         VideoLifecycleService,
       );
+      expect(module.get(VideoProcessingService)).toBeInstanceOf(
+        VideoProcessingService,
+      );
+      expect(module.get(VideoProcessor)).toBeInstanceOf(VideoProcessor);
 
       const processing = module.get<Queue>(
         getQueueToken(VIDEO_PROCESSING_QUEUE),

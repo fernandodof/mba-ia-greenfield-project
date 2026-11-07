@@ -10,6 +10,15 @@ export type DraftFailureReason = Extract<
   'UPLOAD_ABORTED' | 'UPLOAD_EXPIRED' | 'UPLOAD_SIZE_MISMATCH'
 >;
 
+/** What the worker writes on `processing → ready` (TD-09 AMB-2/AMB-3). */
+export interface VideoReadyMetadata {
+  durationMs: number;
+  width: number;
+  height: number;
+  videoCodec: string;
+  thumbnailKey: string;
+}
+
 /**
  * Single home of the guarded status writes (TD-12). Every transition is an
  * `UPDATE … WHERE id = :id AND status = :expected`; `false` means another
@@ -21,6 +30,10 @@ export class VideoLifecycleService {
     @InjectRepository(Video)
     private readonly videoRepository: Repository<Video>,
   ) {}
+
+  findById(id: string): Promise<Video | null> {
+    return this.videoRepository.findOneBy({ id });
+  }
 
   /** `draft → failed` with the given reason, clearing the upload session. */
   async failDraft(id: string, reason: DraftFailureReason): Promise<boolean> {
@@ -44,6 +57,25 @@ export class VideoLifecycleService {
         status: VideoStatus.PROCESSING,
         upload_id: null,
         processing_started_at: () => 'now()',
+      },
+    );
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * `processing → ready` with the extracted metadata and the thumbnail key
+   * (TD-09, TD-12). A `ready` video always has both.
+   */
+  async markReady(id: string, metadata: VideoReadyMetadata): Promise<boolean> {
+    const result = await this.videoRepository.update(
+      { id, status: VideoStatus.PROCESSING },
+      {
+        status: VideoStatus.READY,
+        duration_ms: metadata.durationMs,
+        width: metadata.width,
+        height: metadata.height,
+        video_codec: metadata.videoCodec,
+        thumbnail_key: metadata.thumbnailKey,
       },
     );
     return (result.affected ?? 0) > 0;
