@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 3/16 completed
+**SIs:** 4/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -39,9 +39,16 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.4 — Video Entity, Migration and VideosModule Skeleton
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 11 passing in the SI's files (`src/videos/entities/video.entity.integration-spec.ts` 8, `src/videos/videos.module.spec.ts` 1, `src/database/migrations.integration-spec.ts` 2 updated); full suites 28 suites / 187 tests, e2e 3 suites / 52 tests
+- **Observations:**
+  - The generated migration is `1794056016213-CreateVideos.ts`. Its SQL matches the plan: `videos_status_enum`, unique `slug`, FK `channel_id → channels.id`, indexes `(channel_id)`, `(status, created_at)` and `(status, processing_started_at)`; `down()` drops the FK, the indexes, the table, then the enum. `npm run lint --fix` reformatted it to Prettier style (same as the existing migrations); the SQL is unchanged.
+  - Postgres doesn't index FK columns on its own, so `channel_id` has an explicit `@Index()` to produce the plan's `(channel_id)` index. The enum uses TypeORM's default type name (`videos_status_enum`), so there's no `enumName`.
+  - The `size_bytes` transformer maps `pg`'s bigint string to a `number` on read (`null` stays `null`) and passes values through on write.
+  - The migration revert test now asserts that `videos` and `videos_status_enum` are gone and that the token tables are still there (the previous last migration, `CreateAuthTokens`, is untouched).
+  - Tests added beyond the plan's list: a full round-trip of the media/failure/`processing_started_at` columns, and loading the `channel` relation and the inverse `channel.videos`. Constraint tests check the Postgres error codes (`23505`, `23503`, `22P02`), not just "throws".
+  - Applied to the dev DB with `npm run migration:run`; `migration:revert` drops the table and the enum, and running it again restores them (3 migrations recorded). `openapi.json` is unchanged because `VideosModule` has no controllers yet.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.5 — Video Naming and Sizing Rules
 - **Status:** pending

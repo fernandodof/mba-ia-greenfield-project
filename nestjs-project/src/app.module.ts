@@ -14,6 +14,7 @@ import videoConfig from './config/video.config';
 import swaggerConfig from './config/swagger.config';
 import { envValidationSchema } from './config/env.validation';
 import { QueueModule } from './queue/queue.module';
+import { VideosModule } from './videos/videos.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { QueueModule } from './queue/queue.module';
     }),
     QueueModule,
     AuthModule,
+    VideosModule,
   ],
   controllers: [AppController],
   providers: [AppService],
