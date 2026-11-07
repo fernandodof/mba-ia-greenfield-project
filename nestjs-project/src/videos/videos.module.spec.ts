@@ -8,6 +8,7 @@ import storageConfig from '../config/storage.config';
 import { createTestDataSource } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
 import { Video } from './entities/video.entity';
+import { VideoLifecycleService } from './video-lifecycle.service';
 import { VideosController } from './videos.controller';
 import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
@@ -28,6 +29,9 @@ describe('VideosModule', () => {
       expect(module.get(getRepositoryToken(Video))).toBeDefined();
       expect(module.get(VideosService)).toBeInstanceOf(VideosService);
       expect(module.get(VideosController)).toBeInstanceOf(VideosController);
+      expect(module.get(VideoLifecycleService)).toBeInstanceOf(
+        VideoLifecycleService,
+      );
     } finally {
       await module.close();
     }

@@ -15,6 +15,7 @@ import {
   UPLOAD_PART_URL_TTL_SECONDS,
   VIDEO_PART_SIZE_BYTES,
 } from './video.constants';
+import { VideoLifecycleService } from './video-lifecycle.service';
 import { generateVideoSlug } from './video-slug.util';
 import { originalKey } from './video-storage-keys';
 import { deriveVideoTitle } from './video-title.util';
@@ -63,6 +64,7 @@ export class VideosService {
     private readonly videoRepository: Repository<Video>,
     private readonly channelsService: ChannelsService,
     private readonly storage: StorageService,
+    private readonly lifecycle: VideoLifecycleService,
   ) {}
 
   /**
@@ -176,6 +178,28 @@ export class VideosService {
         throw new VideoUploadNotActiveException();
       }
       throw err;
+    }
+  }
+
+  /**
+   * User abort of the owner's draft (TD-03 AMB-5/AMB-7 revisions): release the
+   * multipart session, delete any original left by the completion crash
+   * window, then move the row to `failed`/`UPLOAD_ABORTED` with a guarded
+   * update. A non-draft video is rejected before any storage call; a guarded
+   * update that matches no row means a concurrent actor (e.g. `complete`)
+   * moved the video first, which also answers VIDEO_UPLOAD_NOT_ACTIVE.
+   */
+  async abortUpload(userId: string, id: string): Promise<void> {
+    const video = await this.findOwnedById(userId, id);
+    const uploadId = this.activeUploadId(video);
+
+    const key = originalKey(id);
+    await this.storage.abortMultipartUpload(key, uploadId);
+    await this.storage.deleteObject(key);
+
+    const failed = await this.lifecycle.failDraft(id, 'UPLOAD_ABORTED');
+    if (!failed) {
+      throw new VideoUploadNotActiveException();
     }
   }
 

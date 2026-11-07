@@ -7,6 +7,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { Channel } from '../channels/entities/channel.entity';
 import storageConfig from '../config/storage.config';
+import { UploadSessionNotFoundError } from '../storage/storage.errors';
 import { StorageService } from '../storage/storage.service';
 import {
   cleanAllTables,
@@ -185,6 +186,53 @@ describe('VideosService (integration)', () => {
       await expect(
         videoRepository.findOneByOrFail({ id: session.id }),
       ).resolves.toMatchObject({ status: VideoStatus.DRAFT });
+    });
+  });
+
+  describe('abortUpload', () => {
+    it('releases the multipart upload and the original, and marks the row failed/UPLOAD_ABORTED', async () => {
+      const user = await createUserWithChannel();
+      const { session, row } = await startUpload(user.id);
+      const key = originalKey(row.id);
+      const signed = await service.signUploadParts(user.id, session.id, [1]);
+      const put = await fetch(signed.parts[0].url, {
+        method: 'PUT',
+        body: new Uint8Array(randomBytes(1024)),
+      });
+      expect(put.status).toBe(200);
+      // Crash window: an original already stored for this draft.
+      await storage.putObject(key, randomBytes(16), 'video/mp4');
+
+      await service.abortUpload(user.id, session.id);
+
+      await expect(
+        storage.listParts(key, row.upload_id!),
+      ).rejects.toBeInstanceOf(UploadSessionNotFoundError);
+      await expect(storage.headObject(key)).resolves.toBeNull();
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.FAILED,
+          failure_reason: 'UPLOAD_ABORTED',
+          upload_id: null,
+        }),
+      );
+    });
+
+    it('still fails the draft when the storage upload is already gone', async () => {
+      const user = await createUserWithChannel();
+      const { session, row } = await startUpload(user.id);
+      await storage.abortMultipartUpload(originalKey(row.id), row.upload_id!);
+
+      await service.abortUpload(user.id, session.id);
+
+      await expect(
+        videoRepository.findOneByOrFail({ id: session.id }),
+      ).resolves.toMatchObject({
+        status: VideoStatus.FAILED,
+        failure_reason: 'UPLOAD_ABORTED',
+      });
     });
   });
 });

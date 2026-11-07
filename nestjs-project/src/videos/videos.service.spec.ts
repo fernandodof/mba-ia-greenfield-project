@@ -12,6 +12,7 @@ import {
   UPLOAD_PART_URL_TTL_SECONDS,
   VIDEO_PART_SIZE_BYTES,
 } from './video.constants';
+import { VideoLifecycleService } from './video-lifecycle.service';
 import { VideoStatus } from './video.types';
 import {
   UploadPartsInvalidException,
@@ -35,6 +36,11 @@ type StorageServiceMock = Pick<
   | 'abortMultipartUpload'
   | 'presignUploadPart'
   | 'listParts'
+  | 'deleteObject'
+>;
+type LifecycleServiceMock = Pick<
+  MockedMethods<VideoLifecycleService>,
+  'failDraft'
 >;
 
 function makeChannel(): Channel {
@@ -81,6 +87,7 @@ describe('VideosService', () => {
   >;
   let channelsService: Pick<MockedMethods<ChannelsService>, 'findByUserId'>;
   let storage: StorageServiceMock;
+  let lifecycle: LifecycleServiceMock;
 
   beforeEach(async () => {
     videoRepository = {
@@ -98,9 +105,15 @@ describe('VideosService', () => {
         jest.fn() as StorageServiceMock['abortMultipartUpload'],
       presignUploadPart: jest.fn() as StorageServiceMock['presignUploadPart'],
       listParts: jest.fn() as StorageServiceMock['listParts'],
+      deleteObject: jest.fn() as StorageServiceMock['deleteObject'],
     };
     storage.createMultipartUpload.mockResolvedValue(UPLOAD_ID);
     storage.abortMultipartUpload.mockResolvedValue(undefined);
+    storage.deleteObject.mockResolvedValue(undefined);
+    lifecycle = {
+      failDraft: jest.fn() as LifecycleServiceMock['failDraft'],
+    };
+    lifecycle.failDraft.mockResolvedValue(true);
 
     const module = await Test.createTestingModule({
       providers: [
@@ -108,6 +121,7 @@ describe('VideosService', () => {
         { provide: getRepositoryToken(Video), useValue: videoRepository },
         { provide: ChannelsService, useValue: channelsService },
         { provide: StorageService, useValue: storage },
+        { provide: VideoLifecycleService, useValue: lifecycle },
       ],
     }).compile();
 
@@ -352,6 +366,87 @@ describe('VideosService', () => {
       await expect(service.listUploadedParts(USER_ID, VIDEO_ID)).rejects.toBe(
         failure,
       );
+    });
+  });
+
+  describe('abortUpload', () => {
+    it('should abort the session, then delete the original, then fail the draft as UPLOAD_ABORTED', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+      const calls: string[] = [];
+      storage.abortMultipartUpload.mockImplementation(() => {
+        calls.push('abort');
+        return Promise.resolve();
+      });
+      storage.deleteObject.mockImplementation(() => {
+        calls.push('delete');
+        return Promise.resolve();
+      });
+      lifecycle.failDraft.mockImplementation(() => {
+        calls.push('failDraft');
+        return Promise.resolve(true);
+      });
+
+      await expect(
+        service.abortUpload(USER_ID, VIDEO_ID),
+      ).resolves.toBeUndefined();
+
+      expect(calls).toEqual(['abort', 'delete', 'failDraft']);
+      expect(storage.abortMultipartUpload).toHaveBeenCalledWith(
+        VIDEO_KEY,
+        UPLOAD_ID,
+      );
+      expect(storage.deleteObject).toHaveBeenCalledWith(VIDEO_KEY);
+      expect(lifecycle.failDraft).toHaveBeenCalledWith(
+        VIDEO_ID,
+        'UPLOAD_ABORTED',
+      );
+    });
+
+    it.each([VideoStatus.PROCESSING, VideoStatus.READY, VideoStatus.FAILED])(
+      'should throw VideoUploadNotActiveException for a %s video without storage calls or status write',
+      async (status) => {
+        videoRepository.findOne.mockResolvedValue(
+          makeVideo({ status, upload_id: null }),
+        );
+
+        await expect(
+          service.abortUpload(USER_ID, VIDEO_ID),
+        ).rejects.toBeInstanceOf(VideoUploadNotActiveException);
+        expect(storage.abortMultipartUpload).not.toHaveBeenCalled();
+        expect(storage.deleteObject).not.toHaveBeenCalled();
+        expect(lifecycle.failDraft).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should throw VideoUploadNotActiveException when the guarded update matches no row', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+      lifecycle.failDraft.mockResolvedValue(false);
+
+      await expect(
+        service.abortUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(VideoUploadNotActiveException);
+      expect(storage.abortMultipartUpload).toHaveBeenCalled();
+      expect(storage.deleteObject).toHaveBeenCalled();
+    });
+
+    it('should propagate VideoNotFoundException for a video the caller does not own', async () => {
+      videoRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.abortUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+      expect(storage.abortMultipartUpload).not.toHaveBeenCalled();
+    });
+
+    it('should rethrow a storage failure and leave the row untouched', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+      const failure = new Error('connection reset');
+      storage.deleteObject.mockRejectedValue(failure);
+
+      await expect(service.abortUpload(USER_ID, VIDEO_ID)).rejects.toBe(
+        failure,
+      );
+      expect(lifecycle.failDraft).not.toHaveBeenCalled();
     });
   });
 });

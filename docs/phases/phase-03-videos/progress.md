@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/16 completed
+**SIs:** 8/16 completed
 
 ### SI-03.1 — Infra: Dependencies, Compose Storage/Queue Services and Configuration
 - **Status:** completed
@@ -97,9 +97,16 @@
   - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.8 — Abort Upload (DELETE /videos/:id/upload)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 23 passing: `src/videos/video-lifecycle.service.integration-spec.ts` 6 (new, real DB), `src/videos/videos.service.spec.ts` +7 (unit, now 28), `src/videos/videos.service.integration-spec.ts` +2 (real DB + `minio`, now 9), and `test/videos-upload-abort.e2e-spec.ts` 8, which covers all 8 scenarios of `nestjs-project/specs/videos-upload-abort.plan.md`. `videos.module.spec.ts` also asserts that `VideoLifecycleService` resolves (no new test). Full suites: 35 suites / 263 tests; e2e 6 suites / 82 tests.
+- **Observations:**
+  - `VideoLifecycleService.failDraft(id, reason)` is `repository.update({ id, status: 'draft' }, { status: 'failed', failure_reason, upload_id: null })` and returns `(affected ?? 0) > 0`. TypeORM 0.3.28's Postgres query runner sets `affected` from pg `rowCount`. context7 doesn't say which drivers report it, so this was checked in the installed source. The reason type is `DraftFailureReason` (`Extract<VideoFailureReason, …>`), exported from the same file. The service is provided and exported by `VideosModule`.
+  - `abortUpload` reuses SI-03.7's private `activeUploadId` guard for the `draft` pre-check. A `draft` with `NULL` `upload_id` also answers 409, the same choice the user accepted in SI-03.7. The order is `abortMultipartUpload` → `deleteObject` → `failDraft`; `false` → `VideoUploadNotActiveException`. Any other storage error propagates before the status write, so the row stays `draft` and the sweeper can expire it later.
+  - Controller: `@Delete(':id/upload')` + `@HttpCode(HttpStatus.NO_CONTENT)`, `ParseUUIDPipe`, `@ApiResponse` 204 with no schema, plus 400/401/404/409 with `ApiErrorEnvelope`. The `openapi.json` change only adds lines (+70).
+  - e2e race scenario (1.6): `jest.spyOn(storage, 'deleteObject').mockImplementationOnce(...)` flips the row to `processing`, then calls `storage.deleteObject` again. The once-implementation is already used up, so that call reaches the real method through the spy. `strictBindCallApply` is off, so `bind` returns `any` (lint `no-unsafe-*`), and capturing the method unbound trips `unbound-method`. In 1.4 the `failed` seed also sets `failure_reason = 'PROCESSING_FAILED'`, so "unchanged" is checked against a non-null value. Test cleanup also deletes any `videos/{id}/original` object, besides aborting open sessions.
+  - Extra unit tests beyond the plan table: the per-status `it.each` (3), propagation of not-owned, and a storage failure that is rethrown without a status write.
+  - context7: `/typeorm/typeorm/0.3.28` (installed 0.3.28) for `Repository.update` / `UpdateResult`; `/nestjs/docs.nestjs.com` for `@Delete` + `@HttpCode(204)`; `/nestjs/swagger/11.4.7` (installed 11.4.2; no 11.4.2 docs, same `ApiResponse` API) for a 204 with no schema. No mismatch affects this code.
+  - Tests ran directly in the container, not through a test sub-agent (nested agent spawns are not allowed in this runtime).
 
 ### SI-03.9 — Complete Upload and Enqueue Processing (POST /videos/:id/upload/complete)
 - **Status:** pending
