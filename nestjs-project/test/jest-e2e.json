@@ -2,9 +2,11 @@
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": ".",
   "testEnvironment": "node",
+  "maxWorkers": 1,
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
-  "setupFiles": ["dotenv/config"]
+  "transformIgnorePatterns": ["/node_modules/(?!(@nestjs/bullmq|@nestjs/bull-shared)/)"],
+  "setupFiles": ["dotenv/config", "<rootDir>/../src/test/setup-test-env.ts"]
 }
