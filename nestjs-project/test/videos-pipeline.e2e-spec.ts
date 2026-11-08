@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Test, type TestingModule } from '@nestjs/testing';
@@ -354,6 +356,43 @@ describe('videos-pipeline', () => {
         const res = await play(failed.slug, mode).expect(404);
         expect(res.body as ErrorResponseBody).toEqual(VIDEO_NOT_FOUND);
         expect(res.headers.location).toBeUndefined();
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hls-playlist-upload-ends-invalid-media-without-fetching-its-urls',
+    async () => {
+      // The in-process worker runs ffprobe in this container, so a listener
+      // on 127.0.0.1 sees any request the playlist would trigger.
+      const requests: string[] = [];
+      const listener = createServer((req, res) => {
+        requests.push(`${req.method} ${req.url}`);
+        res.statusCode = 404;
+        res.end();
+      });
+      await new Promise<void>((resolve) =>
+        listener.listen(0, '127.0.0.1', resolve),
+      );
+      try {
+        const { port } = listener.address() as AddressInfo;
+        const playlist = `#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nhttp://127.0.0.1:${port}/x.ts\n#EXT-X-ENDLIST\n`;
+
+        const id = await uploadAndComplete({
+          bytes: Buffer.from(playlist),
+          filename: 'playlist.mp4',
+          contentType: 'video/mp4',
+        });
+
+        await expect(waitForTerminalStatus(id)).resolves.toMatchObject({
+          id,
+          status: 'failed',
+          failureReason: 'INVALID_MEDIA',
+        });
+        expect(requests).toEqual([]);
+      } finally {
+        await new Promise<void>((resolve) => listener.close(() => resolve()));
       }
     },
     TEST_TIMEOUT_MS,

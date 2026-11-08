@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +11,10 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import storageConfig from '../config/storage.config';
 import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
-import { createTestVideo } from '../test/video-fixtures';
+import {
+  createTestVideo,
+  type TestVideoContainer,
+} from '../test/video-fixtures';
 import { WORKER_SOURCE_URL_TTL_SECONDS } from '../videos/video.constants';
 import { FfmpegService } from './ffmpeg.service';
 import { MediaModule } from './media.module';
@@ -139,6 +144,87 @@ describe('FfmpegService (integration)', () => {
       width: 1152,
       height: 720,
     });
+  });
+
+  it.each<[TestVideoContainer, string, string]>([
+    ['mov', 'video/quicktime', 'h264'],
+    ['mkv', 'video/x-matroska', 'h264'],
+    ['webm', 'video/webm', 'vp9'],
+  ])(
+    'should probe and extract a frame from a %s upload (%s)',
+    async (container, contentType, videoCodec) => {
+      const path = await createTestVideo({ durationSeconds: 1, container });
+      tempFiles.push(path);
+      const url = await uploadAndSign(await readFile(path), contentType);
+
+      await expect(ffmpeg.probe(url)).resolves.toMatchObject({
+        width: 320,
+        height: 240,
+        videoCodec,
+      });
+      const jpeg = await ffmpeg.extractFrame(url, 0);
+      expect(jpeg?.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+    },
+  );
+
+  describe('uploaded content that points at other URLs (SSRF)', () => {
+    let listener: Server;
+    let listenerUrl: string;
+    const requests: string[] = [];
+
+    beforeAll(async () => {
+      listener = createServer((req, res) => {
+        requests.push(`${req.method} ${req.url}`);
+        res.statusCode = 404;
+        res.end();
+      });
+      await new Promise<void>((resolve) =>
+        listener.listen(0, '127.0.0.1', resolve),
+      );
+      const { port } = listener.address() as AddressInfo;
+      listenerUrl = `http://127.0.0.1:${port}`;
+    });
+
+    beforeEach(() => {
+      requests.length = 0;
+    });
+
+    afterAll(async () => {
+      await new Promise<void>((resolve, reject) =>
+        listener.close((err) => (err ? reject(err) : resolve())),
+      );
+    });
+
+    // ffprobe/ffmpeg run in this container, so 127.0.0.1 is this process.
+    const playlists: Array<[string, () => string]> = [
+      [
+        'an HLS media playlist',
+        () =>
+          `#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\n${listenerUrl}/x.ts\n#EXT-X-ENDLIST\n`,
+      ],
+      [
+        'an HLS master playlist',
+        () =>
+          `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n${listenerUrl}/variant.m3u8\n`,
+      ],
+      [
+        'an ffconcat script',
+        () => `ffconcat version 1.0\nfile ${listenerUrl}/x.mp4\n`,
+      ],
+    ];
+
+    it.each(playlists)(
+      'should reject %s as invalid media without fetching its URLs',
+      async (_label, content) => {
+        const url = await uploadAndSign(Buffer.from(content()), 'video/mp4');
+
+        await expect(ffmpeg.probe(url)).rejects.toBeInstanceOf(
+          InvalidMediaError,
+        );
+        await expect(ffmpeg.extractFrame(url, 0)).resolves.toBeNull();
+        expect(requests).toEqual([]);
+      },
+    );
   });
 
   it('should fail as invalid media for an object that is not a video', async () => {

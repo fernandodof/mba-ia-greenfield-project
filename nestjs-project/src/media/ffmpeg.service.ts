@@ -6,6 +6,7 @@ import {
 import {
   EXEC_FILE,
   isTransientFfmpegStderr,
+  MEDIA_INPUT_RESTRICTION_ARGS,
   type ExecFileFn,
 } from './media.constants';
 import { InvalidMediaError, TransientMediaError } from './media.errors';
@@ -48,7 +49,10 @@ function isPositiveInteger(value: unknown): value is number {
 /**
  * Runs ffprobe/ffmpeg (no shell) against a presigned HTTP URL, so the
  * original is never copied locally (TD-09), and classifies failures as
- * transient (retry) or permanent.
+ * transient (retry) or permanent. Every input is restricted to the
+ * whitelisted protocols and demuxers, so uploaded content (e.g. an HLS
+ * playlist) can never make the worker fetch other URLs; a refused input
+ * fails with `Invalid argument`, i.e. as invalid media.
  */
 @Injectable()
 export class FfmpegService {
@@ -66,6 +70,7 @@ export class FfmpegService {
           'json',
           '-show_format',
           '-show_streams',
+          ...MEDIA_INPUT_RESTRICTION_ARGS,
           url,
         ],
         { encoding: 'buffer', timeout: MEDIA_COMMAND_TIMEOUT_MS },
@@ -88,6 +93,7 @@ export class FfmpegService {
           'error',
           '-ss',
           String(t),
+          ...MEDIA_INPUT_RESTRICTION_ARGS,
           '-i',
           url,
           '-frames:v',

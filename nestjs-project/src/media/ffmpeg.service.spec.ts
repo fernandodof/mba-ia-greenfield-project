@@ -6,6 +6,7 @@ import {
 import { FfmpegService } from './ffmpeg.service';
 import {
   EXEC_FILE,
+  isTransientFfmpegStderr,
   TRANSIENT_FFMPEG_STDERR_PATTERNS,
   type ExecFileFn,
 } from './media.constants';
@@ -75,7 +76,27 @@ const TRANSIENT_STDERR = TRANSIENT_FFMPEG_STDERR_PATTERNS.map((pattern) => [
   `[http @ 0x1] ${mixedCase(pattern)} while reading ${URL}`,
 ]);
 
+// What FFmpeg 5.1.9 prints when the input whitelists refuse a demuxer or a
+// protocol (captured from the real binary).
+const REFUSED_INPUT_STDERR = [
+  [
+    'format',
+    `[hls @ 0xaaab0ccf7cc0] Format not on whitelist 'mov,mp4,matroska,webm,avi,flv,mpegts,mpeg,asf,ogg,mxf'\n${URL}: Invalid argument`,
+  ],
+  [
+    'protocol',
+    `[file @ 0xaaaaba234150] Protocol 'file' not on whitelist 'http,https,tcp,tls'!\n${URL}: Invalid argument`,
+  ],
+];
+
 describe('FfmpegService', () => {
+  it.each(REFUSED_INPUT_STDERR)(
+    'should not treat the refused-%s stderr as transient',
+    (_label, stderr) => {
+      expect(isTransientFfmpegStderr(stderr)).toBe(false);
+    },
+  );
+
   let service: FfmpegService;
   let execFile: jest.Mock<ReturnType<ExecFileFn>, Parameters<ExecFileFn>>;
 
@@ -102,6 +123,10 @@ describe('FfmpegService', () => {
           'json',
           '-show_format',
           '-show_streams',
+          '-protocol_whitelist',
+          'http,https,tcp,tls',
+          '-format_whitelist',
+          'mov,mp4,matroska,webm,avi,flv,mpegts,mpeg,asf,ogg,mxf',
           URL,
         ],
         { encoding: 'buffer', timeout: MEDIA_COMMAND_TIMEOUT_MS },
@@ -171,6 +196,17 @@ describe('FfmpegService', () => {
       expect((error as Error).message).not.toContain('X-Amz-Signature');
     });
 
+    it.each(REFUSED_INPUT_STDERR)(
+      'should classify a refused input (%s) as invalid media',
+      async (_label, stderr) => {
+        execFile.mockRejectedValue(exitFailure(stderr));
+
+        await expect(service.probe(URL)).rejects.toBeInstanceOf(
+          InvalidMediaError,
+        );
+      },
+    );
+
     it('should rethrow failures that are not a process exit', async () => {
       const spawnError = Object.assign(new Error('spawn ffprobe ENOENT'), {
         code: 'ENOENT',
@@ -219,6 +255,10 @@ describe('FfmpegService', () => {
           'error',
           '-ss',
           '0.5',
+          '-protocol_whitelist',
+          'http,https,tcp,tls',
+          '-format_whitelist',
+          'mov,mp4,matroska,webm,avi,flv,mpegts,mpeg,asf,ogg,mxf',
           '-i',
           URL,
           '-frames:v',
