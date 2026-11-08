@@ -4,8 +4,10 @@
 
 const FALLBACK_NAME = 'video';
 const VALID_EXTENSION = /^[a-z0-9]{1,10}$/;
-// Control characters plus the characters most file systems reject.
-const FORBIDDEN_CHARACTERS = /[\p{Cc}/\\:*?"<>|]/gu;
+// Control characters (Cc), invisible format characters (Cf: bidi controls
+// such as U+202E RLO that can spoof the extension, zero-width characters,
+// BOM) plus the characters most file systems reject.
+const FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}/\\:*?"<>|]/gu;
 const NON_ASCII = /[^\x20-\x7E]/u;
 
 function sanitizeTitle(title: string): string {

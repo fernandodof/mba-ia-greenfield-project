@@ -9,6 +9,8 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { Channel } from '../channels/entities/channel.entity';
 import storageConfig from '../config/storage.config';
+import { FfmpegService } from '../media/ffmpeg.service';
+import { InvalidMediaError } from '../media/media.errors';
 import { MediaModule } from '../media/media.module';
 import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
@@ -33,6 +35,7 @@ describe('VideoProcessingService (integration)', () => {
   let dataSource: DataSource;
   let storage: StorageService;
   let service: VideoProcessingService;
+  let ffmpeg: FfmpegService;
   let videoRepository: Repository<Video>;
   let channelId: string;
   const videoIds: string[] = [];
@@ -53,6 +56,7 @@ describe('VideoProcessingService (integration)', () => {
     dataSource = module.get(DataSource);
     storage = module.get(StorageService);
     service = module.get(VideoProcessingService);
+    ffmpeg = module.get(FfmpegService);
     videoRepository = dataSource.getRepository(Video);
   }, 30000);
 
@@ -64,6 +68,10 @@ describe('VideoProcessingService (integration)', () => {
     await Promise.all(tempFiles.map((path) => rm(path, { force: true })));
     await cleanAllTables(dataSource);
     await module.close();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   beforeEach(async () => {
@@ -197,6 +205,57 @@ describe('VideoProcessingService (integration)', () => {
         status: VideoStatus.PROCESSING,
         failure_reason: null,
       }),
+    );
+    await expect(storage.headObject(thumbnailKey(id))).resolves.toBeNull();
+  }, 60000);
+
+  // Abort racing a winning `complete` (validation note 2): the first HeadObject
+  // passes, then the original is deleted before ffprobe/ffmpeg read it.
+  it('fails with SOURCE_MISSING (not INVALID_MEDIA) when the original is deleted after the head check, before ffprobe reads it', async () => {
+    const id = await insertVideo(VideoStatus.PROCESSING);
+    await putTestVideo(id);
+    const realProbe = ffmpeg.probe.bind(ffmpeg) as FfmpegService['probe'];
+    jest.spyOn(ffmpeg, 'probe').mockImplementationOnce(async (url) => {
+      await storage.deleteObject(originalKey(id));
+      return realProbe(url);
+    });
+
+    const error = await processError(id);
+
+    expect(error).toBeInstanceOf(VideoProcessingFailure);
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect(error).toMatchObject({ reason: 'SOURCE_MISSING' });
+    // The real ffprobe did hit the 404 and classified it as invalid media.
+    expect((error as VideoProcessingFailure).cause).toBeInstanceOf(
+      InvalidMediaError,
+    );
+    await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+      expect.objectContaining({ status: VideoStatus.PROCESSING }),
+    );
+    await expect(storage.headObject(thumbnailKey(id))).resolves.toBeNull();
+  }, 60000);
+
+  it('fails with SOURCE_MISSING (not THUMBNAIL_FAILED) when the original is deleted after the probe, before the frame is read', async () => {
+    const id = await insertVideo(VideoStatus.PROCESSING);
+    await putTestVideo(id);
+    const realExtractFrame = ffmpeg.extractFrame.bind(
+      ffmpeg,
+    ) as FfmpegService['extractFrame'];
+    const extractFrame = jest
+      .spyOn(ffmpeg, 'extractFrame')
+      .mockImplementationOnce(async (url, t) => {
+        await storage.deleteObject(originalKey(id));
+        return realExtractFrame(url, t);
+      });
+
+    const error = await processError(id);
+
+    expect(error).toBeInstanceOf(VideoProcessingFailure);
+    expect(error).toMatchObject({ reason: 'SOURCE_MISSING' });
+    // Both offsets were tried against the real (now missing) object.
+    expect(extractFrame).toHaveBeenCalledTimes(2);
+    await expect(videoRepository.findOneByOrFail({ id })).resolves.toEqual(
+      expect.objectContaining({ status: VideoStatus.PROCESSING }),
     );
     await expect(storage.headObject(thumbnailKey(id))).resolves.toBeNull();
   }, 60000);

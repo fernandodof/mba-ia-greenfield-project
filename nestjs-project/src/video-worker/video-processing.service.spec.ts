@@ -148,14 +148,47 @@ describe('VideoProcessingService', () => {
     expect(ffmpeg.probe).not.toHaveBeenCalled();
   });
 
-  it('should fail with INVALID_MEDIA when ffprobe reports invalid media', async () => {
+  it('should fail with INVALID_MEDIA when ffprobe reports invalid media and the original still exists', async () => {
     ffmpeg.probe.mockRejectedValue(new InvalidMediaError('Invalid data'));
 
     await expectFailure('INVALID_MEDIA');
 
+    expect(storage.headObject).toHaveBeenCalledTimes(2);
+    expect(storage.headObject).toHaveBeenLastCalledWith(
+      `videos/${VIDEO_ID}/original`,
+    );
     expect(ffmpeg.extractFrame).not.toHaveBeenCalled();
     expect(storage.putObject).not.toHaveBeenCalled();
     expect(lifecycle.markReady).not.toHaveBeenCalled();
+  });
+
+  it('should fail with SOURCE_MISSING when ffprobe reports invalid media because the original vanished mid-read', async () => {
+    const invalid = new InvalidMediaError('Server returned 404 Not Found');
+    ffmpeg.probe.mockRejectedValue(invalid);
+    storage.headObject
+      .mockResolvedValueOnce({ size: 1024 })
+      .mockResolvedValueOnce(null);
+
+    const error = await service.process(VIDEO_ID).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(VideoProcessingFailure);
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect(error).toMatchObject({ reason: 'SOURCE_MISSING', cause: invalid });
+    expect(ffmpeg.extractFrame).not.toHaveBeenCalled();
+    expect(lifecycle.markReady).not.toHaveBeenCalled();
+  });
+
+  it('should rethrow a HeadObject error from the re-check after invalid media (retryable)', async () => {
+    const networkError = new Error('socket hang up');
+    ffmpeg.probe.mockRejectedValue(new InvalidMediaError('Invalid data'));
+    storage.headObject
+      .mockResolvedValueOnce({ size: 1024 })
+      .mockRejectedValueOnce(networkError);
+
+    const error = await service.process(VIDEO_ID).catch((err: unknown) => err);
+
+    expect(error).toBe(networkError);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
   });
 
   it('should rethrow a transient probe error as-is (retryable)', async () => {
@@ -184,14 +217,45 @@ describe('VideoProcessingService', () => {
     expect(lifecycle.markReady).toHaveBeenCalled();
   });
 
-  it('should fail with THUMBNAIL_FAILED when neither offset yields a frame', async () => {
+  it('should fail with THUMBNAIL_FAILED when neither offset yields a frame and the original still exists', async () => {
     ffmpeg.extractFrame.mockResolvedValue(null);
 
     await expectFailure('THUMBNAIL_FAILED');
 
     expect(ffmpeg.extractFrame).toHaveBeenCalledTimes(2);
+    expect(storage.headObject).toHaveBeenCalledTimes(2);
     expect(storage.putObject).not.toHaveBeenCalled();
     expect(lifecycle.markReady).not.toHaveBeenCalled();
+  });
+
+  it('should fail with SOURCE_MISSING when no frame comes back because the original vanished mid-read', async () => {
+    ffmpeg.extractFrame.mockResolvedValue(null);
+    storage.headObject
+      .mockResolvedValueOnce({ size: 1024 })
+      .mockResolvedValueOnce(null);
+
+    await expectFailure('SOURCE_MISSING');
+
+    expect(ffmpeg.extractFrame).toHaveBeenCalledTimes(2);
+    expect(storage.putObject).not.toHaveBeenCalled();
+    expect(lifecycle.markReady).not.toHaveBeenCalled();
+  });
+
+  it('should rethrow a HeadObject error from the re-check after no frame (retryable)', async () => {
+    const networkError = new Error('socket hang up');
+    ffmpeg.extractFrame.mockResolvedValue(null);
+    storage.headObject
+      .mockResolvedValueOnce({ size: 1024 })
+      .mockRejectedValueOnce(networkError);
+
+    await expect(service.process(VIDEO_ID)).rejects.toBe(networkError);
+    expect(storage.putObject).not.toHaveBeenCalled();
+  });
+
+  it('should not re-check the original when the thumbnail succeeds', async () => {
+    await service.process(VIDEO_ID);
+
+    expect(storage.headObject).toHaveBeenCalledTimes(1);
   });
 
   it('should rethrow a transient frame error at t > 0 without the t = 0 fallback', async () => {

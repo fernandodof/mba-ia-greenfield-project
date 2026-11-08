@@ -18,6 +18,11 @@ export function thumbnailOffsetSeconds(durationMs: number): number {
  * verify the original, probe it, store a thumbnail and move the video to
  * `ready`. Permanent media problems throw `VideoProcessingFailure` (no
  * retry); transient storage/ffmpeg errors propagate as-is (retried).
+ *
+ * Before reporting `INVALID_MEDIA` or `THUMBNAIL_FAILED`, the original is
+ * checked again: if it was deleted while ffprobe/ffmpeg read it (an abort
+ * racing a winning `complete`), ffmpeg sees an HTTP 404, and the honest
+ * reason is `SOURCE_MISSING`.
  */
 @Injectable()
 export class VideoProcessingService {
@@ -37,7 +42,7 @@ export class VideoProcessingService {
     }
 
     const sourceKey = originalKey(videoId);
-    if ((await this.storage.headObject(sourceKey)) === null) {
+    if (!(await this.sourceExists(sourceKey))) {
       throw new VideoProcessingFailure(
         'SOURCE_MISSING',
         `Original ${sourceKey} does not exist`,
@@ -55,9 +60,7 @@ export class VideoProcessingService {
       metadata = await this.ffmpeg.probe(url);
     } catch (err) {
       if (err instanceof InvalidMediaError) {
-        throw new VideoProcessingFailure('INVALID_MEDIA', err.message, {
-          cause: err,
-        });
+        throw await this.permanentFailure(sourceKey, 'INVALID_MEDIA', err);
       }
       throw err;
     }
@@ -66,6 +69,9 @@ export class VideoProcessingService {
       url,
       thumbnailOffsetSeconds(metadata.durationMs),
     );
+    if (jpeg === null) {
+      throw await this.permanentFailure(sourceKey, 'THUMBNAIL_FAILED');
+    }
     const key = thumbnailKey(videoId);
     await this.storage.putObject(key, jpeg, 'image/jpeg');
 
@@ -80,21 +86,45 @@ export class VideoProcessingService {
     }
   }
 
-  /** Frame at `t`, then once at `t = 0`; a transient error skips the fallback. */
-  private async extractThumbnail(url: string, t: number): Promise<Buffer> {
+  private async sourceExists(sourceKey: string): Promise<boolean> {
+    return (await this.storage.headObject(sourceKey)) !== null;
+  }
+
+  /**
+   * `reason`, or `SOURCE_MISSING` when the original is gone by now. A
+   * `HeadObject` error propagates (retryable), as on the first check.
+   */
+  private async permanentFailure(
+    sourceKey: string,
+    reason: 'INVALID_MEDIA' | 'THUMBNAIL_FAILED',
+    cause?: InvalidMediaError,
+  ): Promise<VideoProcessingFailure> {
+    if (!(await this.sourceExists(sourceKey))) {
+      return new VideoProcessingFailure(
+        'SOURCE_MISSING',
+        `Original ${sourceKey} disappeared during processing`,
+        { cause },
+      );
+    }
+    return new VideoProcessingFailure(
+      reason,
+      cause?.message ?? 'ffmpeg returned no frame for the thumbnail',
+      { cause },
+    );
+  }
+
+  /**
+   * Frame at `t`, then once at `t = 0`; `null` when neither yields one. A
+   * transient error propagates and skips the fallback.
+   */
+  private async extractThumbnail(
+    url: string,
+    t: number,
+  ): Promise<Buffer | null> {
     const frame = await this.ffmpeg.extractFrame(url, t);
-    if (frame !== null) {
+    if (frame !== null || t <= 0) {
       return frame;
     }
-    if (t > 0) {
-      const fallback = await this.ffmpeg.extractFrame(url, 0);
-      if (fallback !== null) {
-        return fallback;
-      }
-    }
-    throw new VideoProcessingFailure(
-      'THUMBNAIL_FAILED',
-      'ffmpeg returned no frame for the thumbnail',
-    );
+    return this.ffmpeg.extractFrame(url, 0);
   }
 }

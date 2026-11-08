@@ -267,6 +267,27 @@ describe('videos-playback', () => {
     await expect(downloadDisposition(longExt.slug)).resolves.toBe(expected);
   });
 
+  // Post-QA fix: U+202E (RLO) would display `clip‮gpj.exe.mp4` as `clip…4pm.exe.jpg`.
+  it('download-strips-bidi-override-from-content-disposition', async () => {
+    const { video } = await seedVideo({
+      status: VideoStatus.READY,
+      title: 'clip‮gpj.exe',
+      originalFilename: 'clip.mp4',
+    });
+
+    const res = await play(video.slug, 'download').expect(302);
+    const location = new URL(res.headers.location);
+    expect(
+      location.searchParams.get('response-content-disposition'),
+    ).not.toContain('‮');
+
+    const disposition = await downloadDisposition(video.slug);
+    expect(disposition).toBe(
+      `attachment; filename="clipgpj.exe.mp4"; filename*=UTF-8''clipgpj.exe.mp4`,
+    );
+    expect(disposition).not.toMatch(/%E2%80%AE|‮/i);
+  });
+
   it('download-404-for-unknown-or-non-ready-video', async () => {
     const unknown = await play(UNKNOWN_SLUG, 'download').expect(404);
     expect(unknown.body as ErrorResponseBody).toEqual(VIDEO_NOT_FOUND);

@@ -88,4 +88,59 @@ describe('buildDownloadContentDisposition', () => {
       disposition('A__o _ ok.mp4', 'A%C3%A7%C3%A3o%20%F0%9F%8E%AC%20ok.mp4'),
     );
   });
+
+  it('should remove U+202E RIGHT-TO-LEFT OVERRIDE so the extension cannot be spoofed', () => {
+    const header = buildDownloadContentDisposition('clip‮gpj.exe', 'x.mp4');
+
+    expect(header).toBe(disposition('clipgpj.exe.mp4', 'clipgpj.exe.mp4'));
+    expect(header).not.toContain('%E2%80%AE');
+  });
+
+  it.each([
+    ['LRM / RLM', 'a‎b‏c'],
+    ['LRE / RLE / PDF / LRO', 'a‪b‫c‬‭'],
+    ['LRI / RLI / FSI / PDI', '⁦a⁧b⁨c⁩'],
+    ['ALM (U+061C)', 'a؜bc'],
+    ['zero-width space / ZWNJ / ZWJ', 'a​b‌c‍'],
+    ['BOM / ZWNBSP (U+FEFF)', '﻿ab﻿c'],
+    ['word joiner and soft hyphen', 'a⁠b­c'],
+  ])(
+    'should remove bidi and invisible format characters: %s',
+    (_case, title) => {
+      expect(buildDownloadContentDisposition(title, 'x.mp4')).toBe(
+        disposition('abc.mp4', 'abc.mp4'),
+      );
+    },
+  );
+
+  it('should remove format characters before collapsing whitespace and trimming', () => {
+    expect(buildDownloadContentDisposition('‮ My ​ clip.⁩', 'x.mp4')).toBe(
+      disposition('My clip.mp4', 'My%20clip.mp4'),
+    );
+  });
+
+  it.each([
+    [
+      'Arabic',
+      'مرحبا بالعالم',
+      '_____ _______.mp4',
+      '%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%20%D8%A8%D8%A7%D9%84%D8%B9%D8%A7%D9%84%D9%85.mp4',
+    ],
+    [
+      'Hebrew',
+      'שלום עולם',
+      '____ ____.mp4',
+      '%D7%A9%D7%9C%D7%95%D7%9D%20%D7%A2%D7%95%D7%9C%D7%9D.mp4',
+    ],
+  ])('should keep %s (RTL) letters intact', (_case, title, ascii, encoded) => {
+    expect(buildDownloadContentDisposition(title, 'x.mp4')).toBe(
+      disposition(ascii, encoded),
+    );
+  });
+
+  it('should fall back to "video" when the title is only control and format characters', () => {
+    expect(buildDownloadContentDisposition('‮⁦​﻿\u0000‏', 'x.mp4')).toBe(
+      disposition('video.mp4', 'video.mp4'),
+    );
+  });
 });
