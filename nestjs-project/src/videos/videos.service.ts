@@ -136,7 +136,12 @@ export class VideosService {
     }
   }
 
-  /** Owner-scoped read: a missing video and another channel's video both 404. */
+  /**
+   * Owner-scoped read: a missing video and another channel's video both 404.
+   * Postgres matches a `uuid` in any case, so callers must use the returned
+   * `video.id` (canonical lowercase), never the request id, for storage keys,
+   * job ids and lifecycle writes.
+   */
   async findOwnedById(userId: string, id: string): Promise<Video> {
     const video = await this.videoRepository.findOne({
       where: { id, channel: { user_id: userId } },
@@ -194,7 +199,7 @@ export class VideosService {
     }
 
     const expiresAt = new Date(Date.now() + UPLOAD_PART_URL_TTL_SECONDS * 1000);
-    const key = originalKey(id);
+    const key = originalKey(video.id);
     const parts = await Promise.all(
       partNumbers.map(async (partNumber) => ({
         partNumber,
@@ -222,7 +227,10 @@ export class VideosService {
     const uploadId = this.activeUploadId(video);
 
     try {
-      const parts = await this.storage.listParts(originalKey(id), uploadId);
+      const parts = await this.storage.listParts(
+        originalKey(video.id),
+        uploadId,
+      );
       return { parts };
     } catch (err) {
       if (err instanceof UploadSessionNotFoundError) {
@@ -244,11 +252,11 @@ export class VideosService {
     const video = await this.findOwnedById(userId, id);
     const uploadId = this.activeUploadId(video);
 
-    const key = originalKey(id);
+    const key = originalKey(video.id);
     await this.storage.abortMultipartUpload(key, uploadId);
     await this.storage.deleteObject(key);
 
-    const failed = await this.lifecycle.failDraft(id, 'UPLOAD_ABORTED');
+    const failed = await this.lifecycle.failDraft(video.id, 'UPLOAD_ABORTED');
     if (!failed) {
       throw new VideoUploadNotActiveException();
     }
@@ -269,7 +277,7 @@ export class VideosService {
   ): Promise<VideoProcessingStartedDto> {
     const video = await this.findOwnedById(userId, id);
     if (video.status === VideoStatus.PROCESSING) {
-      await this.processingQueue.enqueue(id);
+      await this.processingQueue.enqueue(video.id);
       return this.processingStarted(video);
     }
 
@@ -278,7 +286,7 @@ export class VideosService {
       throw new UploadPartsInvalidException();
     }
 
-    const key = originalKey(id);
+    const key = originalKey(video.id);
     await this.completeStoredUpload(key, uploadId, parts);
 
     const stored = await this.storage.headObject(key);
@@ -288,21 +296,21 @@ export class VideosService {
     }
     if (stored.size !== video.size_bytes) {
       await this.storage.deleteObject(key);
-      await this.lifecycle.failDraft(id, 'UPLOAD_SIZE_MISMATCH');
+      await this.lifecycle.failDraft(video.id, 'UPLOAD_SIZE_MISMATCH');
       throw new UploadSizeMismatchException();
     }
 
-    const moved = await this.lifecycle.markProcessing(id);
+    const moved = await this.lifecycle.markProcessing(video.id);
     if (!moved) {
       // Another actor moved the row first; only a concurrent `complete`
       // (now `processing`) is a success for this call.
-      const current = await this.findOwnedById(userId, id);
+      const current = await this.findOwnedById(userId, video.id);
       if (current.status !== VideoStatus.PROCESSING) {
         throw new VideoUploadNotActiveException();
       }
     }
 
-    await this.processingQueue.enqueue(id);
+    await this.processingQueue.enqueue(video.id);
     return this.processingStarted(video);
   }
 

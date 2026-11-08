@@ -700,6 +700,105 @@ describe('VideosService', () => {
     });
   });
 
+  // ParseUUIDPipe accepts any case and Postgres matches a `uuid` in any case,
+  // so the request id may be uppercase; storage, queue and lifecycle calls
+  // must always use the loaded entity's canonical (lowercase) id.
+  describe('uppercase request id', () => {
+    const UPPER_ID = VIDEO_ID.toUpperCase();
+    const SIZE = VIDEO_PART_SIZE_BYTES + 1; // partCount 2
+    const PARTS = [
+      { partNumber: 1, etag: '"a"' },
+      { partNumber: 2, etag: '"b"' },
+    ];
+
+    it('should sign parts for the canonical key', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+      storage.presignUploadPart.mockResolvedValue('http://signed');
+
+      await service.signUploadParts(USER_ID, UPPER_ID, [1]);
+
+      expect(storage.presignUploadPart).toHaveBeenCalledWith(
+        VIDEO_KEY,
+        UPLOAD_ID,
+        1,
+        UPLOAD_PART_URL_TTL_SECONDS,
+      );
+    });
+
+    it('should list parts of the canonical key', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+      storage.listParts.mockResolvedValue([]);
+
+      await service.listUploadedParts(USER_ID, UPPER_ID);
+
+      expect(storage.listParts).toHaveBeenCalledWith(VIDEO_KEY, UPLOAD_ID);
+    });
+
+    it('should abort, delete and fail the draft with the canonical id', async () => {
+      videoRepository.findOne.mockResolvedValue(makeVideo());
+
+      await service.abortUpload(USER_ID, UPPER_ID);
+
+      expect(storage.abortMultipartUpload).toHaveBeenCalledWith(
+        VIDEO_KEY,
+        UPLOAD_ID,
+      );
+      expect(storage.deleteObject).toHaveBeenCalledWith(VIDEO_KEY);
+      expect(lifecycle.failDraft).toHaveBeenCalledWith(
+        VIDEO_ID,
+        'UPLOAD_ABORTED',
+      );
+    });
+
+    it('should complete, mark processing and enqueue with the canonical id', async () => {
+      videoRepository.findOne.mockResolvedValue(
+        makeVideo({ slug: 'abcdefghijk', size_bytes: SIZE }),
+      );
+      storage.completeMultipartUpload.mockResolvedValue(undefined);
+      storage.headObject.mockResolvedValue({ size: SIZE });
+
+      const result = await service.completeUpload(USER_ID, UPPER_ID, PARTS);
+
+      expect(result.id).toBe(VIDEO_ID);
+      expect(storage.completeMultipartUpload).toHaveBeenCalledWith(
+        VIDEO_KEY,
+        UPLOAD_ID,
+        PARTS,
+      );
+      expect(storage.headObject).toHaveBeenCalledWith(VIDEO_KEY);
+      expect(lifecycle.markProcessing).toHaveBeenCalledWith(VIDEO_ID);
+      expect(processingQueue.enqueue).toHaveBeenCalledWith(VIDEO_ID);
+    });
+
+    it('should re-enqueue a processing video under the canonical job id', async () => {
+      videoRepository.findOne.mockResolvedValue(
+        makeVideo({ status: VideoStatus.PROCESSING, upload_id: null }),
+      );
+
+      const result = await service.completeUpload(USER_ID, UPPER_ID, PARTS);
+
+      expect(result.id).toBe(VIDEO_ID);
+      expect(processingQueue.enqueue).toHaveBeenCalledWith(VIDEO_ID);
+    });
+
+    it('should delete and fail with the canonical id on a size mismatch', async () => {
+      videoRepository.findOne.mockResolvedValue(
+        makeVideo({ size_bytes: SIZE }),
+      );
+      storage.completeMultipartUpload.mockResolvedValue(undefined);
+      storage.headObject.mockResolvedValue({ size: SIZE + 1 });
+
+      await expect(
+        service.completeUpload(USER_ID, UPPER_ID, PARTS),
+      ).rejects.toBeInstanceOf(UploadSizeMismatchException);
+      expect(storage.deleteObject).toHaveBeenCalledWith(VIDEO_KEY);
+      expect(lifecycle.failDraft).toHaveBeenCalledWith(
+        VIDEO_ID,
+        'UPLOAD_SIZE_MISMATCH',
+      );
+    });
+  });
+
   describe('getPlaybackUrl', () => {
     const SLUG = 'AbCdEfGhIjK';
     const PRESIGNED_URL =
