@@ -891,5 +891,22 @@ describe('VideosService', () => {
         expect(storage.presignGetObject).not.toHaveBeenCalled();
       },
     );
+
+    // Post-QA (bug 4): a NUL byte reached PostgreSQL and answered 500.
+    it.each([
+      ['a NUL byte', '\u0000', 'stream'],
+      ['a 10-char value', 'AbCdEfGhIj', 'download'],
+      ['a 12-char value', 'AbCdEfGhIjKl', 'stream'],
+      ['a non-base64url character', 'AbCdE.GhIjK', 'download'],
+    ] as const)(
+      'should throw VideoNotFoundException for %s without querying',
+      async (_case, slug, mode) => {
+        await expect(service.getPlaybackUrl(slug, mode)).rejects.toBeInstanceOf(
+          VideoNotFoundException,
+        );
+        expect(videoRepository.findOne).not.toHaveBeenCalled();
+        expect(storage.presignGetObject).not.toHaveBeenCalled();
+      },
+    );
   });
 });

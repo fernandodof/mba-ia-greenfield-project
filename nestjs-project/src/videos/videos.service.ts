@@ -24,7 +24,7 @@ import {
 } from './video.constants';
 import { VideoLifecycleService } from './video-lifecycle.service';
 import { VideoProcessingQueue } from './video-processing.queue';
-import { generateVideoSlug } from './video-slug.util';
+import { generateVideoSlug, isVideoSlug } from './video-slug.util';
 import { originalKey } from './video-storage-keys';
 import { deriveVideoTitle } from './video-title.util';
 import { VideoStatus } from './video.types';
@@ -158,9 +158,13 @@ export class VideosService {
    * `ready` videos resolve; an unknown slug and a `draft`/`processing`/
    * `failed` video both answer VIDEO_NOT_FOUND, so the state is not revealed.
    * `download` adds an attachment `Content-Disposition`; `stream` has no
-   * response overrides.
+   * response overrides. A value that is not an 11-char base64url slug
+   * cannot exist, so it answers VIDEO_NOT_FOUND before any query.
    */
   async getPlaybackUrl(slug: string, mode: PlaybackMode): Promise<string> {
+    if (!isVideoSlug(slug)) {
+      throw new VideoNotFoundException();
+    }
     const video = await this.videoRepository.findOne({
       where: { slug, status: VideoStatus.READY },
     });
