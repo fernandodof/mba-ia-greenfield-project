@@ -131,6 +131,42 @@ describe('StorageService (integration)', () => {
       await storage.abortMultipartUpload(key, uploadId);
     });
 
+    it('should reject a non-last part under 5 MiB (EntityTooSmall) with InvalidUploadPartsError', async () => {
+      const key = newKey();
+      const uploadId = await storage.createMultipartUpload(key, CONTENT_TYPE);
+      const parts = await uploadParts(key, uploadId, [1, 1]);
+
+      const error: unknown = await storage
+        .completeMultipartUpload(key, uploadId, parts)
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(InvalidUploadPartsError);
+      expect((error as InvalidUploadPartsError).cause).toMatchObject({
+        name: 'EntityTooSmall',
+      });
+      await storage.abortMultipartUpload(key, uploadId);
+    });
+
+    it('should keep the session usable after EntityTooSmall so a corrected retry completes', async () => {
+      const key = newKey();
+      const uploadId = await storage.createMultipartUpload(key, CONTENT_TYPE);
+      const tooSmall = await uploadParts(key, uploadId, [1, 1]);
+      await expect(
+        storage.completeMultipartUpload(key, uploadId, tooSmall),
+      ).rejects.toBeInstanceOf(InvalidUploadPartsError);
+
+      const url = await storage.presignUploadPart(key, uploadId, 1, EXPIRES_IN);
+      const etag = await putPart(url, randomBytes(MIN_PART_SIZE));
+      await storage.completeMultipartUpload(key, uploadId, [
+        { partNumber: 1, etag },
+        tooSmall[1],
+      ]);
+
+      expect(await storage.headObject(key)).toEqual({
+        size: MIN_PART_SIZE + 1,
+      });
+    });
+
     it('should throw UploadSessionNotFoundError when listing parts of an aborted upload', async () => {
       const key = newKey();
       const uploadId = await storage.createMultipartUpload(key, CONTENT_TYPE);

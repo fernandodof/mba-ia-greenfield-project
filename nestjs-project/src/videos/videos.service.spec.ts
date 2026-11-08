@@ -601,6 +601,25 @@ describe('VideosService', () => {
       expect(lifecycle.markProcessing).not.toHaveBeenCalled();
     });
 
+    it('should keep the upload session resumable when storage rejects undersized parts (EntityTooSmall)', async () => {
+      videoRepository.findOne.mockResolvedValue(makeDraft());
+      storage.completeMultipartUpload.mockRejectedValue(
+        new InvalidUploadPartsError(VIDEO_KEY, UPLOAD_ID, {
+          cause: Object.assign(new Error('too small'), {
+            name: 'EntityTooSmall',
+          }),
+        }),
+      );
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, PARTS),
+      ).rejects.toBeInstanceOf(UploadPartsInvalidException);
+      expect(storage.abortMultipartUpload).not.toHaveBeenCalled();
+      expect(storage.deleteObject).not.toHaveBeenCalled();
+      expect(lifecycle.failDraft).not.toHaveBeenCalled();
+      expect(processingQueue.enqueue).not.toHaveBeenCalled();
+    });
+
     it('should continue from the size check when the session is gone but the object exists', async () => {
       videoRepository.findOne.mockResolvedValue(makeDraft());
       storage.completeMultipartUpload.mockRejectedValue(

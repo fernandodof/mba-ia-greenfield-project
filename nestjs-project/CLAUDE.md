@@ -227,7 +227,7 @@ Names, payloads and job options are shared in `src/videos/video-queue.constants.
 
 ### Storage
 
-`StorageService` (`src/storage/`) is the only entry point to S3 and owns two clients: `internal` (`S3_ENDPOINT`) for every operation and `presign` (`S3_PUBLIC_ENDPOINT`) for signing client URLs only (signing is offline). Worker URLs are signed with the internal client. Both clients set `forcePathStyle` and `requestChecksumCalculation` / `responseChecksumValidation: 'WHEN_REQUIRED'`; the SDK default adds CRC32 checksums that presigned part URLs cannot satisfy. Key layout (`src/videos/video-storage-keys.ts`): `videos/{videoId}/original` and `videos/{videoId}/thumbnail.jpg`. Match SDK errors by `err.name` (`NoSuchUpload`, `NotFound`, `InvalidPart`).
+`StorageService` (`src/storage/`) is the only entry point to S3 and owns two clients: `internal` (`S3_ENDPOINT`) for every operation and `presign` (`S3_PUBLIC_ENDPOINT`) for signing client URLs only (signing is offline). Worker URLs are signed with the internal client. Both clients set `forcePathStyle` and `requestChecksumCalculation` / `responseChecksumValidation: 'WHEN_REQUIRED'`; the SDK default adds CRC32 checksums that presigned part URLs cannot satisfy. Key layout (`src/videos/video-storage-keys.ts`): `videos/{videoId}/original` and `videos/{videoId}/thumbnail.jpg`. Match SDK errors by `err.name` (`NoSuchUpload`, `NotFound`, `InvalidPart`, `InvalidPartOrder`, `EntityTooSmall`). Complete-time part rejections (`InvalidPart*`, `EntityTooSmall` = a non-last part under 5 MiB) become `InvalidUploadPartsError` → `400 UPLOAD_PARTS_INVALID`; the session survives, so the draft stays resumable.
 
 ### Testing videos
 

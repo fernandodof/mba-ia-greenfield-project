@@ -14,7 +14,7 @@ export class UploadSessionNotFoundError extends Error {
   }
 }
 
-/** The parts sent to complete an upload were rejected (S3 `InvalidPart` / `InvalidPartOrder`). */
+/** The parts sent to complete an upload were rejected (S3 `InvalidPart` / `InvalidPartOrder` / `EntityTooSmall`). */
 export class InvalidUploadPartsError extends Error {
   constructor(
     readonly key: string,

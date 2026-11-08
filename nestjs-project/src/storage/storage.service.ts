@@ -38,7 +38,14 @@ export interface PresignGetObjectOptions {
   responseContentDisposition?: string;
 }
 
-const INVALID_PARTS_ERROR_NAMES = new Set(['InvalidPart', 'InvalidPartOrder']);
+// Client-caused CompleteMultipartUpload rejections that leave the upload
+// session intact: the client can re-upload parts and retry. `EntityTooSmall`
+// means a part other than the last is under the 5 MiB S3 minimum.
+const INVALID_PARTS_ERROR_NAMES = new Set([
+  'InvalidPart',
+  'InvalidPartOrder',
+  'EntityTooSmall',
+]);
 
 /** S3 errors are matched by `err.name` (see library-refs.md → Error matching). */
 function errorName(err: unknown): string | undefined {
