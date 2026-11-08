@@ -235,6 +235,35 @@ describe('VideoProcessor (integration)', () => {
     );
   }, 60000);
 
+  it('moves a valid MP4 whose ffprobe JSON exceeds 1 MiB to ready on the first attempt', async () => {
+    const id = await insertProcessingVideo();
+    const path = await createTestVideo({ commentBytes: 2 * 1024 * 1024 });
+    tempFiles.push(path);
+    await storage.putObject(originalKey(id), await readFile(path), 'video/mp4');
+    // `failed` fires for every failed attempt, retried or not.
+    let failedAttempts = 0;
+    const onFailed = (job: Job | undefined): void => {
+      if (job?.id === id) failedAttempts += 1;
+    };
+    processor.worker.on('failed', onFailed);
+
+    try {
+      await producer.enqueue(id);
+
+      await expect(waitForTerminalRow(id)).resolves.toEqual(
+        expect.objectContaining({
+          status: VideoStatus.READY,
+          failure_reason: null,
+          width: 320,
+          height: 240,
+        }),
+      );
+      expect(failedAttempts).toBe(0);
+    } finally {
+      processor.worker.off('failed', onFailed);
+    }
+  }, 60000);
+
   it('writes nothing for a failed job without videoId, leaving other processing rows untouched', async () => {
     const otherId = await insertProcessingVideo();
     const jobId = `no-video-id-${randomUUID()}`;

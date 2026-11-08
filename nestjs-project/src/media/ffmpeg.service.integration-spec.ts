@@ -15,7 +15,10 @@ import {
   createTestVideo,
   type TestVideoContainer,
 } from '../test/video-fixtures';
-import { WORKER_SOURCE_URL_TTL_SECONDS } from '../videos/video.constants';
+import {
+  PROBE_MAX_BUFFER_BYTES,
+  WORKER_SOURCE_URL_TTL_SECONDS,
+} from '../videos/video.constants';
 import { FfmpegService } from './ffmpeg.service';
 import { MediaModule } from './media.module';
 import { InvalidMediaError, TransientMediaError } from './media.errors';
@@ -127,6 +130,39 @@ describe('FfmpegService (integration)', () => {
       expect(height).toBeLessThanOrEqual(720);
       expect(width % 2).toBe(0);
       expect(height % 2).toBe(0);
+    });
+  });
+
+  it('should probe a valid MP4 whose ffprobe JSON exceeds the 1 MiB Node default', async () => {
+    const path = await createTestVideo({
+      durationSeconds: 2,
+      commentBytes: 2 * 1024 * 1024,
+    });
+    tempFiles.push(path);
+    const { stdout: rawJson } = await execFileAsync(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+        '-print_format',
+        'json',
+        '-show_format',
+        '-show_streams',
+        path,
+      ],
+      { encoding: 'buffer', maxBuffer: PROBE_MAX_BUFFER_BYTES },
+    );
+    expect(rawJson.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(rawJson.length).toBeLessThan(PROBE_MAX_BUFFER_BYTES);
+    const url = await uploadAndSign(await readFile(path), 'video/mp4');
+
+    const result = await ffmpeg.probe(url);
+
+    expect(Math.abs(result.durationMs - 2000)).toBeLessThanOrEqual(100);
+    expect(result).toMatchObject({
+      width: 320,
+      height: 240,
+      videoCodec: 'h264',
     });
   });
 

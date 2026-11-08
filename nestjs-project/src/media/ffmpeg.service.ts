@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   MEDIA_COMMAND_TIMEOUT_MS,
+  PROBE_MAX_BUFFER_BYTES,
   THUMBNAIL_MAX_BUFFER_BYTES,
 } from '../videos/video.constants';
 import {
@@ -23,6 +24,9 @@ const THUMBNAIL_SCALE_FILTER =
   "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
 
 const MAX_STDERR_IN_MESSAGE = 500;
+
+/** Node's `execFile` rejection when stdout or stderr exceeds `maxBuffer`. */
+const MAX_BUFFER_EXCEEDED = 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 
 /** Shape of the error a promisified `execFile` rejects with. */
 interface ExecFileFailure {
@@ -73,9 +77,21 @@ export class FfmpegService {
           ...MEDIA_INPUT_RESTRICTION_ARGS,
           url,
         ],
-        { encoding: 'buffer', timeout: MEDIA_COMMAND_TIMEOUT_MS },
+        {
+          encoding: 'buffer',
+          timeout: MEDIA_COMMAND_TIMEOUT_MS,
+          maxBuffer: PROBE_MAX_BUFFER_BYTES,
+        },
       ));
     } catch (err) {
+      // ffprobe's output is a deterministic function of the file, so a retry
+      // would overflow again: permanent, unlike other non-exit failures.
+      if ((err as ExecFileFailure | null)?.code === MAX_BUFFER_EXCEEDED) {
+        throw new InvalidMediaError(
+          `ffprobe output exceeds ${PROBE_MAX_BUFFER_BYTES} bytes`,
+          { cause: err },
+        );
+      }
       const stderr = this.failureStderr(err, url, 'ffprobe');
       throw new InvalidMediaError(`ffprobe failed: ${stderr}`, { cause: err });
     }
@@ -123,7 +139,7 @@ export class FfmpegService {
    * Throws for every failure that is not a permanent media problem: a
    * timeout or transient stderr → `TransientMediaError`; anything that is not
    * a process exit (spawn error, maxBuffer overflow, foreign signal) is
-   * rethrown as-is. Returns the (redacted) stderr of a non-transient exit.
+   * rethrown as-is (`probe` handles its own overflow before calling this). Returns the (redacted) stderr of a non-transient exit.
    */
   private failureStderr(err: unknown, url: string, command: string): string {
     const failure = (err ?? {}) as ExecFileFailure;

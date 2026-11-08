@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import {
   MEDIA_COMMAND_TIMEOUT_MS,
+  PROBE_MAX_BUFFER_BYTES,
   THUMBNAIL_MAX_BUFFER_BYTES,
 } from '../videos/video.constants';
 import { FfmpegService } from './ffmpeg.service';
@@ -129,7 +130,11 @@ describe('FfmpegService', () => {
           'mov,mp4,matroska,webm,avi,flv,mpegts,mpeg,asf,ogg,mxf',
           URL,
         ],
-        { encoding: 'buffer', timeout: MEDIA_COMMAND_TIMEOUT_MS },
+        {
+          encoding: 'buffer',
+          timeout: MEDIA_COMMAND_TIMEOUT_MS,
+          maxBuffer: PROBE_MAX_BUFFER_BYTES,
+        },
       );
     });
 
@@ -215,6 +220,25 @@ describe('FfmpegService', () => {
 
       await expect(service.probe(URL)).rejects.toBe(spawnError);
     });
+
+    it.each(['stdout', 'stderr'])(
+      'should classify a %s maxBuffer overflow as invalid media (deterministic output)',
+      async (stream) => {
+        const overflow = Object.assign(
+          new RangeError(`${stream} maxBuffer length exceeded`),
+          { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' },
+        );
+        execFile.mockRejectedValue(overflow);
+
+        const error = await service.probe(URL).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(InvalidMediaError);
+        expect((error as Error).message).toContain(
+          `exceeds ${PROBE_MAX_BUFFER_BYTES} bytes`,
+        );
+        expect((error as Error).cause).toBe(overflow);
+      },
+    );
 
     it.each([
       ['unparsable JSON', 'not json'],
